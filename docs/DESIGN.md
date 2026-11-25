@@ -683,6 +683,53 @@ DeepSeek TTS 直出 `wav`/`pcm`/`opus`（VERIFIED §2），而微信语音条类
 
 > **200 元买的是她一天里发生多少事，不是她一句话说得多好。**
 
+
+### 11.11 已做的系统调整
+
+2026-11-25 实际执行，重启后仍生效：
+
+| 动作 | 结果 | 为什么 |
+|---|---|---|
+| 停 `mumble-server` | inactive + disabled，64738 关闭 | §11.2：不在关键路径上，全网友端口是负债 |
+| 装依赖 | `python3-venv python3-pip sqlite3 ffmpeg libopus0 libopus-dev` | §11.4 |
+| 加 2 G swap | `/swapfile`，写进 fstab | OOM 保险，防"她突然沉默半小时" |
+| `vm.swappiness` = 10 | `gits-sysctl.service` 钉住 | 见下 |
+| `fwupd` | masked | 虚拟机做固件更新无意义，白吃 20–160 MB |
+
+**验证过的能力**（不是假设）：`venv` 可用 · FTS5/FTS4/JSON1 全在 · `journal_mode=WAL` 生效 · `synchronous=FULL` 设得住 · `UNIQUE(source, ts)` 抛 IntegrityError · ffmpeg 有 `libopus`/`pcm_s16le`/`aac` · 时区 Asia/Shanghai 且 NTP 同步 · 到 DeepSeek TTFB 174–183 ms。
+
+#### 一个值得记下来的坑：三个东西在抢同一个旋钮
+
+`vm.swappiness` 在这台机器上**有三个主人**：
+
+```
+/etc/sysctl.d/99-apsara-sysctl.conf   vm.swappiness = 0    ← 阿里云镜像
+/usr/lib/tuned/virtual-guest/tuned.conf  vm.swappiness = 30  ← tuned 的 profile
+/etc/sysctl.d/99-gits.conf            vm.swappiness = 10   ← 我们自己写的（无效）
+```
+
+而实测开机后拿到的值是 **0** —— 也就是说 **tuned 实际上并没有赢**，尽管它 `After=systemd-sysctl.service`。我们把这三个都打回原值再依次重启验证：
+
+```
+after systemd-sysctl: 0
+after tuned:          0        ← tuned 没有覆盖
+after gits-sysctl:   10        ← 我们的
+```
+
+**结论不是"加第四个主人"，而是"加一个明确排在最后的写入者"。** 与其猜 systemd 的加载顺序，不如用一个 oneshot 单元把它钉死：
+
+```ini
+[Unit]
+After=systemd-sysctl.service tuned.service
+[Service]
+Type=oneshot
+ExecStart=/sbin/sysctl -w vm.swappiness=10
+[Install]
+WantedBy=multi-user.target
+```
+
+顺带一个可复用的教训：**配置的"所有权"必须唯一且可验证。** 这条以后在 `config.toml` 的魔法数字上同样适用——每个参数都要能回答"谁写的、写在哪、为什么是这个值"。
+
 ---
 
 ## 12. 读码结论（nocturne_memory / revive-companion）

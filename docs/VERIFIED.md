@@ -87,3 +87,32 @@
 - [ ] 个人微信账号走 iLink 是否有"不得用于长期无人值守自动对话"之类的条款（读《微信ClawBot功能使用条款》原文）
 - [ ] bge-m3 在目标 ECS 规格（几核几 G）上的单句延迟
 - [ ] `safety_check` 误杀率：对亲密/玩笑语境的误判是否可接受
+
+---
+
+## 8. ECS 环境实测（2026-11-25）
+
+| 项 | 值 |
+|---|---|
+| OS / 内核 | Ubuntu 22.04.5 / 5.15.0-186-generic |
+| CPU / 内存 / 磁盘 | 2 vCPU Xeon Platinum / 1.6 GiB / 40 G（用 6.5 G） |
+| swap | 2 G（`/swapfile`）——原先**没有** |
+| Python | 3.10.12；`venv` 可用，pip 22.0.2 |
+| SQLite | 3.37.2，**FTS5 / FTS4 / JSON1 全部可用**；WAL 与 `synchronous=FULL` 实测生效 |
+| ffmpeg | 4.4.2，含 `libopus` / `pcm_s16le` / `aac` |
+| 到 api.deepseek.com | TCP 10 ms，TLS 95 ms，TTFB 174–183 ms |
+| 到 dashscope | TLS 134 ms |
+| 对外端口 | 只剩 22（mumble 的 64738 已停） |
+
+**`vm.swappiness` 有三个主人**：`/etc/sysctl.d/99-apsara-sysctl.conf` 写 0、tuned 的 `virtual-guest` profile 写 30、我们的 `sysctl.d` 写 10。实测开机后是 **0**——**tuned 并没有赢**，尽管它 `After=systemd-sysctl.service`。
+
+依次把三者打回原值再重启验证：
+
+```
+after systemd-sysctl: 0
+after tuned:          0
+after gits-sysctl:   10
+```
+
+已改用 `gits-sysctl.service`（`After=systemd-sysctl.service tuned.service`）作为明确排在最后的写入者，钉在 10。教训：**配置的所有权必须唯一且可验证**，这以后同样适用于 `config.toml` 里的每一个魔法数字。
+
