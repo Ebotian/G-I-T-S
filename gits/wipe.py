@@ -32,6 +32,14 @@ def wipe(db: DB, *, actor: str = "her", now: int | None = None,
         Writer(db).redact_event(int(r["id"]))
         counts[str(r["kind"])] = counts.get(str(r["kind"]), 0) + 1
 
+    # 注意力权重要一起清：它是内容（种下来的偏好），不是机制。
+    # 不清的话 wipe 之后 peers 还显示着旧偏好——「清干净了」就是假的。
+    n_att = db.scalar("SELECT count(*) FROM attention WHERE actor_id=?", (actor,))
+    with Writer(db).txn() as c:
+        c.execute("DELETE FROM attention WHERE actor_id=?", (actor,))
+    if n_att:
+        counts["attention_weights"] = int(n_att)
+
     # 内容没了，投影也得跟着空——否则重放出来的图还留着旧节点
     if counts:
         with Writer(db).txn() as c:

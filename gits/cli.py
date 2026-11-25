@@ -501,6 +501,12 @@ def cmd_seed(args: argparse.Namespace) -> int:
     if not args.text and not args.topic:
         print("给点什么：一段文字，和/或 --topic 话题=权重")
         return 1
+    # 一个真会咬人的歧义：--topic A=1 B=2 时，B=2 会被当成**人格正文**吞下去。
+    # 「不报错但结果错」的典型——所以这里直接拒绝。
+    if (args.topic and args.text and "=" in args.text
+            and args.text.split("=", 1)[1].replace(".", "", 1).isdigit()):
+        print(f"「{args.text}」看起来是偏好不是正文。要多写几条请重复 --topic。")
+        return 1
     actors.ensure(db, args.actor, is_main=(args.actor == actors.MAIN))
     if args.text:
         ev = seed(db, args.text, actor=args.actor)

@@ -70,3 +70,24 @@ def test_清空不动别人的内容(db) -> None:
     wipe.wipe(db, actor="her", now=T0)
     row = db.one("SELECT payload FROM events WHERE ext_id='peer1-seed'")
     assert row["payload"] is not None, "只清她自己的"
+
+
+def test_清空也清注意力权重(db) -> None:
+    from gits import attention
+
+    attention.seed(db, "her", {"开会": 1.2})
+    assert attention.weights(db, "her") == {"开会": 1.2}
+    got = wipe.wipe(db, now=T0)
+    assert got.get("attention_weights") == 1
+    assert attention.weights(db, "her") == {}, \
+        "权重是内容，不清的话「清干净了」就是假的"
+
+
+def test_清空的返回值对得上状态(db) -> None:
+    persona.seed(db, "一段", now=T0)
+    from gits import attention
+
+    attention.seed(db, "her", {"a": 1.0})
+    got = wipe.wipe(db, now=T0)
+    assert wipe.states(db) == {}
+    assert got["seed"] == 1 and got["attention_weights"] == 1
