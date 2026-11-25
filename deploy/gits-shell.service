@@ -1,20 +1,33 @@
 [Unit]
 Description=G-I-T-S 通道（投递 outbox / 收消息）
-Documentation=file:/srv/gits/docs/research/ecs.md
-After=network-online.target gits-ghost.service
-Wants=network-online.target gits-ghost.service
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=notify
 NotifyAccess=main
 WatchdogSec=180
 Restart=always
-RestartSec=3
+RestartSec=2
 
-WorkingDirectory=/srv/gits
-# 微信通道（iLink Bot）。游标存在 var/weixin.cursor.json——
-# 服务端只给"新"消息，不存游标就等于丢消息。
-ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db shell --weixin-state /srv/gits/var/weixin.json --node cloud
+# 实例的身份：非 root、不能登录
+User=gits
+Group=gits
+WorkingDirectory=/srv/gits-runtime
+
+EnvironmentFile=/etc/gits.env
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
+    --db /var/lib/gits/gits.db shell \
+    --weixin-state /var/lib/gits/weixin.json --node cloud
+
+# 三层隔离的后两层：即使文件权限被改松，这一步也挡住。
+# 实例跑的是 /srv/gits-runtime 里的一份代码拷贝，不需要仓库。
+InaccessiblePaths=/srv/gits
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/gits
 
 MemoryMax=150M
 Nice=5

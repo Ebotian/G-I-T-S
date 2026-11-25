@@ -1,6 +1,5 @@
 [Unit]
-Description=G-I-T-S 内核（心跳 / 回复 / 快照）
-Documentation=file:/srv/gits/docs/research/ecs.md
+Description=G-I-T-S 内核（心跳 / 回复 / 快照 / 整理）
 After=network-online.target
 Wants=network-online.target
 
@@ -11,12 +10,24 @@ WatchdogSec=180
 Restart=always
 RestartSec=2
 
-WorkingDirectory=/srv/gits
-# 密钥只在这一个文件里，0600，不进 git
+# 实例的身份：非 root、不能登录
+User=gits
+Group=gits
+WorkingDirectory=/srv/gits-runtime
+
 EnvironmentFile=/etc/gits.env
-ExecStart=/srv/gits/.venv/bin/python -m gits.cli \
-    --db /srv/gits/var/gits.db ghost \
-    --node cloud --persona /srv/gits/var/persona.md
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
+    --db /var/lib/gits/gits.db ghost \
+    --node cloud --persona /var/lib/gits/persona.md
+
+# 三层隔离的后两层：即使文件权限被改松，这一步也挡住。
+# 实例跑的是 /srv/gits-runtime 里的一份代码拷贝，不需要仓库。
+InaccessiblePaths=/srv/gits
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/gits
 
 MemoryMax=200M
 Nice=5

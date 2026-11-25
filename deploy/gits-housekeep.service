@@ -1,18 +1,25 @@
 [Unit]
 Description=G-I-T-S 夜间家务（恢复重放 + 一致性自检）
-Documentation=file:/srv/gits/docs/research/ecs.md
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-User=root
-WorkingDirectory=/srv/gits
+# 跑成实例自己的身份：家务也不该顺手读到设计仓库
+User=gits
+Group=gits
+WorkingDirectory=/srv/gits-runtime
+InaccessiblePaths=/srv/gits
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ReadWritePaths=/var/lib/gits
+
 # replay 是恢复重放：清空投影，只用日志集重建。
 # 它同时是一次免费的重放回归测试——重建失败就说明不变量坏了。
-ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db replay --restore
-# 顺手把状态写进 journal，事后能回看那一晚发生了什么
-ExecStartPost=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db status
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/gits.db replay --restore
+ExecStartPost=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/gits.db status
 Nice=10
 IOSchedulingClass=idle
 MemoryMax=400M
