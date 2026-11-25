@@ -44,10 +44,19 @@ def load_persona(path: str | Path | None) -> PersonaSeed:
     return PersonaSeed(narrative=DEFAULT_PERSONA, version=0)
 
 
-def recent(db: DB, n: int = 6) -> tuple[tuple[str, str], ...]:
+def recent(db: DB, *, from_id: int | None = None, until_id: int | None = None,
+           limit: int = 200) -> tuple[tuple[str, str], ...]:
+    """**这一扇窗里的全部对话**，不是"最近 6 句"。
+
+    之前写死 6 句，于是 prompt 长度会永远卡在同一个数上——
+    60%/80% 两个阈值一辈子都触发不了，窗口也就永远换不掉。
+    窗口的边界由 from_id/until_id 定，长度由预算管。
+    """
     rows = db.q(
         "SELECT kind, payload FROM events"
-        " WHERE kind IN ('msg_in','msg_out') ORDER BY id DESC LIMIT ?", (n,))
+        " WHERE kind IN ('msg_in','msg_out')"
+        " AND id >= COALESCE(?, 0) AND id <= COALESCE(?, 1<<62)"
+        " ORDER BY id DESC LIMIT ?", (from_id, until_id, limit))
     out = []
     for r in reversed(rows):
         who = "他" if r["kind"] == "msg_in" else "我"
@@ -89,7 +98,9 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     text = (event["payload"] or b"").decode("utf-8", "replace")
 
     # C 段：这一轮才有的东西。**检索在这里发生**——上下文扩展 + r。
-    history = recent(db)
+    win = ctxwin.current(db)
+    history = recent(db, from_id=win["first_event_id"] if win else None,
+                     until_id=event["id"])
     seed = persona or load_persona(None)
     snap = relation(db, now=now)
     hits = recall(db, text, context=" ".join(t for _w, t in history),
@@ -101,7 +112,8 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
 
     # 记账：窗口长度和命中数都用 API 返回的，不估算（估错了预算就假了）。
-    win = ctxwin.current(db) or {"id": ctxwin.open_window(db, ts=now)}
+    win = win or {"id": ctxwin.open_window(db, ts=now,
+                                           first_event_id=event["id"])}
     ctxwin.record(db, win["id"],
                   tokens=int(reply.usage.get("prompt_tokens") or 0),
                   hit_tokens=int(reply.usage.get("prompt_cache_hit_tokens") or 0),
