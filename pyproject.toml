@@ -1,0 +1,19 @@
+[project]
+name = "gits"
+version = "0.0.1"
+description = "G-I-T-S: a ghost with many shells"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+gits = "gits.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gits"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
