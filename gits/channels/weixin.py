@@ -205,6 +205,14 @@ class WeixinChannel:
         self.cursor_path.write_text(json.dumps({"get_updates_buf": self._buf}),
                                     encoding="utf-8")
 
+    def ack(self) -> None:
+        """shell 确认这批已经落库。**这时候才推进游标。**"""
+        pending = getattr(self, "_pending", None)
+        if pending and pending != self._buf:
+            self._buf = pending
+            self._save_cursor()
+        self._pending = None
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -218,8 +226,11 @@ class WeixinChannel:
                 continue
             buf = resp.get("get_updates_buf")
             if buf and buf != self._buf:
-                self._buf = buf
-                self._save_cursor()
+                # **只记在内存里，先不落盘**。等 shell 把这批消息写进库，
+                # 它会调 ack() —— 那时才存游标。
+                # 顺序反过来的话：存了游标、消息还在队列里、进程崩了 →
+                # 那批消息永远消失（服务端只给"新"的）。
+                self._pending = buf
             for msg in resp.get("msgs") or []:
                 if msg.get("message_type") != MSG_USER:
                     continue

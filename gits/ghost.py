@@ -108,13 +108,20 @@ class Ghost:
     _last_ctx: int = 0
     #: 整理一次大概要多久。先拍 20 秒，之后用实测中位数替换。
     compact_ms_est: int = 20_000
+    _compact_future: object | None = None
+    _pool: object | None = None
     _last_beat: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
     last_error: str = ""
 
     def __post_init__(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
         self.w = Writer(self.db)
+        # 整理跑在这里，不占心跳线程（一次 thinking=high 要几秒到几十秒）
+        self._pool = ThreadPoolExecutor(max_workers=1,
+                                        thread_name_prefix="compact")
 
     # ── 心跳 ──
     def beat(self, t: int | None = None) -> bool:
@@ -195,16 +202,15 @@ class Ghost:
         plan = ctxwin.plan(self.db, now=t, idle=estimate(self.db, t),
                            compact_ms=self.compact_ms_est)
         if plan.action in ("compact_idle", "compact_force"):
-            try:
-                got = compact(self.db, now=t, reason=plan.reason)
-            except Exception as exc:
-                self.last_error = f"compact: {type(exc).__name__}: {exc}"
-                return f"{plan.action} 失败"
-            if got is not None:
-                self.last_error = ""
-                return f"{plan.action} → 窗 {got.window_id}（{got.summary[:20]}…）"
+            # **整理不在心跳线程里跑。** 它要一次 thinking=high 的调用（几秒到几十秒），
+            # 放在 tick 里等于这段时间他不回话。
+            if self._compact_future is not None and not self._compact_future.done():
+                return ""
+            self._compact_future = self._pool.submit(
+                compact, self.db, now=t, reason=plan.reason)
+            return f"{plan.action} 已交给后台"
         elif plan.action == "new_window":
-            ctxwin.open_window(self.db, ts=t)
+            ctxwin.new_window(self.db, ts=t, reason=plan.reason)
             return "new_window"
         return ""
 

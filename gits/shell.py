@@ -35,7 +35,11 @@ class Channel(Protocol):
         """返回 (outbox.status, meta)。"""
 
     def poll(self) -> list[dict]:
-        """返回收到的消息：[{text, ts, ext_id}]。"""
+        """返回收到的消息：[{text, ts, ext_id, from, context_token}]。"""
+
+    def ack(self) -> None:
+        """确认这一批已经**落库**了。通道可以在这之后推进游标。"""
+
 
 
 # ── 文件通道 ────────────────────────────────────────────────
@@ -97,6 +101,7 @@ class Shell:
     _last_scan: int = 0
     _last_poll: int = 0
     stopped: bool = False
+    dropped: int = 0
 
     def __post_init__(self) -> None:
         self.w = Writer(self.db)
@@ -116,23 +121,60 @@ class Shell:
 
     # ── 往里 ──
     def intake(self, t: int | None = None) -> int:
-        """把收到的消息写进 events。`ext_id` 保证同一条不会被算两遍。"""
+        """把收到的消息写进 events。`ext_id` 保证同一条不会被算两遍。
+
+        **游标只在落库之后才推进**（`ch.ack()`）。反过来的话，进程在
+        "游标已存、消息还没写"之间退出，那条消息就永远消失了——
+        服务端只给"新"消息，它不会为一次崩溃重发。
+        """
         t = now_ms() if t is None else t
         n = 0
         for ch in self.channels:
-            for item in ch.poll():
+            items = ch.poll()
+            for item in items or []:
+                actor = str(item.get("from") or item.get("actor_id") or "")
+                if not self._admit(actor, ch.name):
+                    self.dropped += 1
+                    continue
                 ext = item.get("ext_id") or f"{ch.name}:{item.get('ts', t)}:{hash(item.get('text','')) & 0xffff}"
-                _, created = self.w.append_event(
+                ev, created = self.w.append_event(
                     source="shell", kind="msg_in", ext_id=str(ext),
                     ts=int(item.get("ts", t)), recv_ts=t,
                     payload=str(item.get("text", "")).encode(),
                 )
+                # 路由跟着消息一起落库：回复谁，由**这条消息**决定。
+                if actor:
+                    with self.w.txn() as c:
+                        c.execute(
+                            "INSERT INTO event_route(event_id, channel, actor_id,"
+                            " context_token) VALUES(?,?,?,?)"
+                            " ON CONFLICT(event_id) DO NOTHING",
+                            (ev, ch.name, actor, item.get("context_token") or None))
                 if created:
                     n += 1
                     self._remember(item, ch.name, t)
                     self._link_reply(t)
+            ack = getattr(ch, "ack", None)
+            if ack:
+                ack()                      # 落库了，通道才可以推进游标
         self._last_poll = t
         return n
+
+    def _admit(self, actor: str, channel: str) -> bool:
+        """单用户准入。**第二个人的话不进库**——不是不礼貌，是没法负责。
+
+        没有这一层，任何能给这个 bot 发消息的人都能把内容写进她的记忆，
+        而她的回复又会发给"最近联系人"。默认只认**第一个说过话的人**。
+        """
+        if not actor:
+            return True                   # 文件通道之类没有身份
+        allowed = os.environ.get("GITS_ALLOW_ACTORS", "").strip()
+        if allowed:
+            return actor in {a.strip() for a in allowed.split(",") if a.strip()}
+        first = self.db.scalar(
+            "SELECT actor_id FROM contacts WHERE channel=? ORDER BY rowid LIMIT 1",
+            (channel,))
+        return first is None or first == actor
 
     def _remember(self, item: dict, channel: str, t: int) -> None:
         """记住这条消息的 context_token。
@@ -211,6 +253,9 @@ class WeixinAdapter:
 
     def poll(self) -> list[dict]:
         return self.inner.poll()
+
+    def ack(self) -> None:
+        self.inner.ack()
 
 
 async def serve(db_path: str | Path, *, channels: list | None = None,

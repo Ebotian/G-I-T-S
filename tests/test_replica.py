@@ -84,14 +84,15 @@ def test_中途失败时游标不前进(tmp_path: Path, monkeypatch) -> None:
             replica.pull(src, rep, "replica")
         monkeypatch.setattr(replica, "import_logset", real)
 
-        # 已应用的那一路游标前进了，没应用的那一路没前进
+        # 已应用的那一路游标前进了，炸掉的那一路没前进。
+        # 顺序是 events → model_calls → ...，所以第二次（model_calls）炸。
         cur = {r["stream"]: r["last_id"] for r in
                rep.q("SELECT stream, last_id FROM sync_cursor")}
-        assert cur.get("redactions", 0) > 0 or cur.get("observability", 0) >= 0
-        assert cur.get("events", 0) == 0, "事件流没应用，游标不该动"
+        assert cur.get("events", 0) > 0, "事件先拉，应该已经落库"
+        assert cur.get("model_calls", 0) == 0, "炸掉的那一路游标不该动"
 
         r = replica.pull(src, rep, "replica")
-        assert r.applied["events"] == 5
+        assert r.applied["events"] == 0, "事件已经落过，重拉不该重复"
         ok, why = replica.verify(src, rep)
         assert ok, why
 

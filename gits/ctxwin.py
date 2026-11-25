@@ -41,6 +41,17 @@ def current(db: DB) -> dict | None:
     return dict(row) if row else None
 
 
+def new_window(db: DB, *, ts: int | None = None, reason: str = "") -> int:
+    """换一扇新窗。**边界一定要写**：不写 first_event_id，下一轮查询
+    会从 0 开始读，把旧窗口的历史又读回来——换了等于没换。"""
+    ts = ts or now_ms()
+    cur = current(db)
+    if cur:
+        close(db, cur["id"], reason=reason or "换窗", ts=ts)
+    edge = db.scalar("SELECT max(id) FROM events") or 0
+    return open_window(db, ts=ts, first_event_id=int(edge) + 1)
+
+
 def open_window(db: DB, *, ts: int | None = None,
                 first_event_id: int | None = None) -> int:
     cur = current(db)

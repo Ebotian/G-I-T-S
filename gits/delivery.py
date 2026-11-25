@@ -117,6 +117,12 @@ def dispatch(db: DB, channel, *, now: int | None = None, max_attempts: int = 3,
             with Writer(db).txn() as c:
                 c.execute("INSERT INTO outcomes(outbox_id, ts, kind, ref_event_id)"
                           " VALUES(?,?,?,?)", (row["id"], now, "delivered", None))
+            # **发出去了才算说过。** 不写这条，下一轮装配里只有他的消息、
+            # 没有她自己的话——她会"忘记自己刚说过什么"。
+            Writer(db).append_event(
+                source=getattr(channel, "name", "channel"), kind="msg_out",
+                ext_id=f"outbox:{row['id']}", ts=now, recv_ts=now,
+                payload=str(row["text"]).encode())
         elif status == "failed":
             out.failed += 1
     return out

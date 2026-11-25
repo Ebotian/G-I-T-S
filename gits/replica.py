@@ -21,9 +21,16 @@ from gits.db import DB, LOG_STREAMS
 from gits.events import export_logset, import_logset
 from gits.project import dump_projection, restore
 
-#: 拉取顺序：删除优先，人格其次，事件最后。
-#: 顺序有意义——删掉的东西不该在"还没删"的事件之后才被处理。
-PULL_ORDER = ("redactions", "observability", "model_calls", "events")
+#: 拉取顺序：**事件必须最先**。
+#:
+#: 依赖是单向的：model_calls / redactions 都指向事件。反过来先拉它们，
+#: 引用的对象还不存在——而它们是靠 (source, ext_id) 重建引用的，
+#: 对象没到就永远重建不出来。实测第一版就是这么写的（而且更糟：
+#: pull 传的是源库的**本地 id**，本地 id 和对面不一定一样）。
+PULL_ORDER = ("events", "model_calls", "redactions", "observability")
+
+#: 依赖事件的流。这些行的事件引用解析不出来时不能硬写，也不能推进游标。
+DEPENDS_ON_EVENTS = ("model_calls", "redactions")
 
 
 @dataclass
@@ -73,18 +80,39 @@ def pull(src: DB, dst: DB, node: str, *, limit_rows: int = 500) -> PullResult:
 
     for stream in PULL_ORDER:
         after = cursors.get(stream, 0)
-        payload = {stream: list(_rows_after(src, stream, after, limit_rows))}
-        if not payload[stream]:
+        # ★ 用 export 而不是裸表：只有 export 会带上 event_ref，
+        # 而 import 靠 event_ref 重建本地引用（裸 id 是对面的 id）。
+        rows = export_logset(src, after={stream: after}).get(stream, [])
+        rows = rows[:limit_rows]
+        if not rows:
             applied[stream] = 0
             continue
 
-        before = _count(dst, stream)
-        import_logset(dst, payload)
-        applied[stream] = _count(dst, stream) - before
+        ready, blocked = rows, []
+        if stream in DEPENDS_ON_EVENTS:
+            have = _event_keys(dst)
+            ready = [r for r in rows
+                     if not r.get("event_ref") or r["event_ref"] in have]
+            blocked = [r for r in rows if r not in ready]
 
-        # ★ 应用成功之后才推进游标。崩在这之前，下次从旧游标重来——
-        # 导入是幂等的，重来一遍不会多出行。
-        last = max(int(r[_pk(stream)]) for r in payload[stream])
+        if ready:
+            before = _count(dst, stream)
+            import_logset(dst, {stream: ready})
+            applied[stream] = _count(dst, stream) - before
+            # 应用成功之后才推进游标。崩在这之前，下次从旧游标重来。
+            last = max(int(r[_pk(stream)]) for r in ready)
+        else:
+            applied[stream] = 0
+            last = after
+
+        if blocked:
+            # 有依赖没到齐：游标停在**第一条没应用的行之前**，
+            # 否则这些行会被跳过，而它们的事件以后到了也没人回头补。
+            first_blocked = min(int(r[_pk(stream)]) for r in blocked)
+            last = min(last, first_blocked - 1)
+            if last <= after:
+                applied[stream] = applied.get(stream, 0)
+                continue
         _set_cursor(dst, node, stream, last)
         cursors[stream] = last
 
@@ -106,6 +134,13 @@ def _rows_after(db: DB, stream: str, after: int, limit: int) -> list[dict]:
         if len(out) >= limit:
             break
     return out
+
+
+def _event_keys(db: DB) -> set[str]:
+    from gits.events import event_key
+
+    return {event_key(r["source"], r["ext_id"])
+            for r in db.conn.execute("SELECT source, ext_id FROM events")}
 
 
 def _count(db: DB, stream: str) -> int:

@@ -125,16 +125,27 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
         prompt_hash=prompt.a_hash,
     )
 
-    contact = db.one("SELECT actor_id, last_context_token FROM contacts"
-                     " WHERE channel='weixin' ORDER BY last_seen DESC LIMIT 1")
+    # **收件人由触发这条回复的消息决定**，不是"最近联系人"。
+    # 只有一个用户时看不出差别；但两颗消息交错处理时，后者会把前者的
+    # 回复发到另一个人那里——而这种 bug 要等到有第二个人那天才现形。
+    route = db.one("SELECT channel, actor_id, context_token FROM event_route"
+                   " WHERE event_id=?", (event["id"],))
+    contact = route
+    if contact is None:                     # 老事件（v13 之前）退回旧办法
+        contact = db.one("SELECT actor_id, last_context_token FROM contacts"
+                         " WHERE channel='weixin' ORDER BY last_seen DESC LIMIT 1")
+    channel = (contact["channel"] if contact and "channel" in contact.keys()
+               else "weixin")
+    token = (contact["context_token"] if contact and "context_token" in contact.keys()
+             else (contact["last_context_token"] if contact else None))
     with Writer(db).txn() as c:
         cur = c.execute(
             "INSERT INTO outbox(ts, channel, text, status, meta, ref_event_id)"
             " VALUES(?,?,?,'pending',?,?)",
-            (now, "weixin", reply.text,
+            (now, channel, reply.text,
              None if not contact else
              __import__("json").dumps({"to": contact["actor_id"],
-                                       "context_token": contact["last_context_token"]},
+                                       "context_token": token},
                                       ensure_ascii=False),
              event["id"]))
         outbox_id = int(cur.lastrowid)
