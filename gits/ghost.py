@@ -86,20 +86,13 @@ class FileTransport:
 class Ghost:
     db: DB
     node: str = "cloud"
-    transport: Transport = field(default_factory=NullTransport)
 
     #: 心跳间隔。取 5 分钟的倍数，是因为"她还活着"不需要秒级精度，
     #: 而事件表要能被 replay 得动。
     heartbeat_ms: int = 5 * 60_000
-    #: 投递扫描间隔
-    scan_ms: int = 5_000
     #: 快照/重建索引间隔
     snapshot_ms: int = 15 * 60_000
-    #: 超过这个年龄还没发出去的 outbox 行，就当作过期
-    outbox_ttl_ms: int = 10 * 60_000
-
     _last_beat: int = 0
-    _last_scan: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
 
@@ -119,25 +112,8 @@ class Ghost:
         self._last_beat = t
         return created
 
-    # ── 投递 ──
-    def scan_outbox(self, t: int | None = None) -> dict[str, int]:
-        """把 pending 的行交给通道。过期的行**不许无限挂着**。"""
-        t = now_ms() if t is None else t
-        counts: dict[str, int] = {}
-        rows = self.db.q(
-            "SELECT id, text, channel, ts FROM outbox WHERE status='pending'"
-            " ORDER BY id LIMIT 50")
-        for row in rows:
-            stale = t - int(row["ts"]) > self.outbox_ttl_ms
-            status = self.transport.send(row["text"], row["channel"]) if not stale \
-                else "dropped"
-            with self.w.txn() as c:
-                c.execute("UPDATE outbox SET status=?, meta=? WHERE id=?",
-                          (status, "expired" if stale else self.transport.name,
-                           row["id"]))
-            counts[status] = counts.get(status, 0) + 1
-        self._last_scan = t
-        return counts
+    # 投递已经搬到 shell（gits/shell.py）。ghost 只管心跳与快照——
+    # 一个进程只认一种外设，比什么都塞在一起更容易看住。
 
     # ── 快照 ──
     def snapshot(self, t: int | None = None) -> None:
@@ -161,8 +137,6 @@ class Ghost:
         did = {}
         if t - self._last_beat >= self.heartbeat_ms or not self._last_beat:
             did["beat"] = self.beat(t)
-        if t - self._last_scan >= self.scan_ms:
-            did["outbox"] = self.scan_outbox(t)
         if t - self._last_snapshot >= self.snapshot_ms or not self._last_snapshot:
             self.snapshot(t)
             did["snapshot"] = True
@@ -170,10 +144,10 @@ class Ghost:
 
 
 async def serve(db_path: str | Path, *, node: str = "cloud",
-                transport: Transport | None = None, once: bool = False) -> int:
+                once: bool = False) -> int:
     """常驻循环。SIGTERM 时**把手上这一拍做完再退**。"""
     db = DB(db_path)
-    ghost = Ghost(db=db, node=node, transport=transport or NullTransport())
+    ghost = Ghost(db=db, node=node)
 
     def _stop(*_: object) -> None:
         ghost.stopped = True

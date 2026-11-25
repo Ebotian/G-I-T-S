@@ -107,16 +107,50 @@ def cmd_quota(args: argparse.Namespace) -> int:
 
 
 def cmd_ghost(args: argparse.Namespace) -> int:
-    """常驻内核。第一版只做：心跳、投递、快照。"""
+    """常驻内核：心跳 + 快照。投递在 shell 里，不在这里。"""
     import asyncio as _asyncio
 
-    from .ghost import FileTransport, NullTransport, serve
+    from .ghost import serve
 
-    transport = FileTransport(args.outbox_file) if args.outbox_file else NullTransport()
-    with _open(args) as _db:
+    if args.outbox_file:
+        print("警告：--outbox-file 已废弃，投递搬到 gits shell", file=sys.stderr)
+    with _open(args):
         pass                                  # 只为建库/迁移，随后 serve 自己开
-    return _asyncio.run(serve(args.db, node=args.node, transport=transport,
-                              once=args.once))
+    return _asyncio.run(serve(args.db, node=args.node, once=args.once))
+
+
+def cmd_shell(args: argparse.Namespace) -> int:
+    """通道。往外投递 outbox，往里收消息。"""
+    import asyncio as _asyncio
+
+    from .shell import serve
+
+    with _open(args):
+        pass
+    return _asyncio.run(serve(args.db, out_file=args.out, in_file=args.inbox,
+                              node=args.node, once=args.once))
+
+
+def cmd_say_out(args: argparse.Namespace) -> int:
+    """往 outbox 里塞一条，用来手工验证投递链路。"""
+    with _open(args) as db:
+        w = Writer(db)
+        with w.txn() as c:
+            cur = c.execute(
+                "INSERT INTO outbox(ts, channel, text, status) VALUES(?,?,?, 'pending')",
+                (now_ms(), args.channel, args.text))
+            print(json.dumps({"outbox_id": cur.lastrowid,
+                              "channel": args.channel}, ensure_ascii=False))
+    return 0
+
+
+def cmd_inbox(args: argparse.Namespace) -> int:
+    """模拟"他回了一句"：往投递箱追加一行。"""
+    item = {"text": args.text, "ext_id": args.ext_id or f"m{now_ms()}"}
+    with open(args.file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    print(json.dumps(item, ensure_ascii=False))
+    return 0
 
 
 def cmd_recall(args: argparse.Namespace) -> int:
@@ -247,6 +281,24 @@ def build_parser() -> argparse.ArgumentParser:
     gh.add_argument("--outbox-file", default=None, help="投递到文件（没有真通道时）")
     gh.add_argument("--once", action="store_true", help="只跑一拍就退出（测试用）")
     gh.set_defaults(fn=cmd_ghost)
+
+    sh = sub.add_parser("shell", help="通道（投递 + 收消息）")
+    sh.add_argument("--out", default="var/outbox.jsonl")
+    sh.add_argument("--inbox", default="var/inbox.jsonl")
+    sh.add_argument("--node", default="cloud")
+    sh.add_argument("--once", action="store_true")
+    sh.set_defaults(fn=cmd_shell)
+
+    so = sub.add_parser("say-out", help="手工往 outbox 塞一条")
+    so.add_argument("text")
+    so.add_argument("--channel", default="desk_audio")
+    so.set_defaults(fn=cmd_say_out)
+
+    ib = sub.add_parser("inbox", help="模拟他回了一句")
+    ib.add_argument("text")
+    ib.add_argument("--file", default="var/inbox.jsonl")
+    ib.add_argument("--ext-id", default=None)
+    ib.set_defaults(fn=cmd_inbox)
 
     rc = sub.add_parser("recall", help="她现在能想起什么")
     rc.add_argument("query")

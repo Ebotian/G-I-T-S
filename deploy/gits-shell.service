@@ -1,0 +1,23 @@
+[Unit]
+Description=G-I-T-S 通道（投递 outbox / 收消息）
+Documentation=file:/srv/gits/docs/research/ecs.md
+After=network-online.target gits-ghost.service
+Wants=network-online.target gits-ghost.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=120
+Restart=always
+RestartSec=2
+
+WorkingDirectory=/srv/gits
+# 文件通道：发到 outbox.jsonl，收自 inbox.jsonl。
+# 看起来像个玩具，但它能证明 outbox → 投递 → outcomes → 回复 这条闭环真的通。
+ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db shell --out /srv/gits/var/outbox.jsonl --inbox /srv/gits/var/inbox.jsonl --node cloud
+
+MemoryMax=150M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

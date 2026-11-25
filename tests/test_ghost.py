@@ -59,46 +59,7 @@ def test_心跳的_ext_id_带节点名(tmp_path: Path) -> None:
         assert [r["ext_id"].split(":")[0] for r in rows] == ["office", "cloud"]
 
 
-# ── 投递 ────────────────────────────────────────────────────
-def test_投递走通道并且真的写出去了(tmp_path: Path) -> None:
-    out = tmp_path / "outbox.txt"
-    with _db(tmp_path) as db:
-        oid = _pending(db)
-        counts = Ghost(db=db, transport=FileTransport(out)).scan_outbox(T0 + MIN)
-        assert counts == {"sent": 1}
-        assert db.scalar("SELECT status FROM outbox WHERE id=?", (oid,)) == "sent"
-        assert "在吗" in out.read_text(encoding="utf-8")
-
-
-def test_没有通道就如实记_dropped(tmp_path: Path) -> None:
-    with _db(tmp_path) as db:
-        oid = _pending(db)
-        counts = Ghost(db=db).scan_outbox(T0 + MIN)
-        assert counts == {"dropped": 1}
-        row = db.one("SELECT status, meta FROM outbox WHERE id=?", (oid,))
-        assert row["status"] == "dropped"
-        assert row["meta"] == "null"
-
-
-def test_过期的不许无限挂着(tmp_path: Path) -> None:
-    out = tmp_path / "o.txt"
-    with _db(tmp_path) as db:
-        oid = _pending(db, ts=T0)
-        Ghost(db=db, transport=FileTransport(out)).scan_outbox(T0 + 3 * 60 * MIN)
-        row = db.one("SELECT status, meta FROM outbox WHERE id=?", (oid,))
-        assert row["status"] == "dropped" and row["meta"] == "expired"
-        assert not out.exists() or out.read_text() == ""
-
-
-def test_已发送的不会被重复扫描(tmp_path: Path) -> None:
-    out = tmp_path / "o.txt"
-    with _db(tmp_path) as db:
-        _pending(db)
-        g = Ghost(db=db, transport=FileTransport(out))
-        g.scan_outbox(T0 + MIN)
-        assert g.scan_outbox(T0 + 2 * MIN) == {}
-        assert out.read_text(encoding="utf-8").count("在吗") == 1
-
+# 投递已经搬到 shell 与 delivery，测试见 tests/test_shell.py
 
 # ── 节流 ────────────────────────────────────────────────────
 def test_一拍里各项按自己的间隔触发(tmp_path: Path) -> None:

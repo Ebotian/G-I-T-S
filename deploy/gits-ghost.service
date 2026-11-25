@@ -14,8 +14,8 @@ Restart=always
 RestartSec=2
 
 WorkingDirectory=/srv/gits
-# 有真通道之前，投递写到文件里——这样投递这一步是可验证的，不是空转
-ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db ghost --node cloud --outbox-file /srv/gits/var/outbox.log
+# 投递已经搬到 gits-shell.service。这个进程只做心跳与快照。
+ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db ghost --node cloud
 
 MemoryMax=200M
 Nice=5
