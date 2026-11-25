@@ -41,7 +41,25 @@ class Projection:
     outbox: list[tuple]
     influence: list[tuple]
 
-    def canonical(self) -> str:
+    def canonical(self, *, stable: bool = False) -> str:
+        """规范化 JSON。
+
+        `stable=True` 会丢掉**自增 id**（node_content.id / outbox.id /
+        influence.id）——两份副本按各自的插入顺序生成自增 id，必然不同；
+        比较语义时不该被它们干扰（`replica.verify` 用的就是这个）。
+        """
+        if stable:
+            return json.dumps(
+                {
+                    "nodes": sorted(self.nodes),
+                    "contents": sorted(r[1:] for r in self.contents),
+                    "edges": sorted(self.edges),
+                    "outbox": sorted(r[1:] for r in self.outbox),
+                    "influence": sorted(r[1:] for r in self.influence),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         return json.dumps(
             {
                 "nodes": sorted(self.nodes),

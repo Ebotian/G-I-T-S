@@ -112,6 +112,35 @@ def cmd_trace(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sync(args: argparse.Namespace) -> int:
+    """从另一份库拉增量。反复调用直到没有新增（断点续传就这么简单）。"""
+    from .replica import pull
+    with _open(args) as dst:
+        with DB(Path(args.src)) as src:
+            rounds, total = 0, {}
+            while True:
+                r = pull(src, dst, args.node, limit_rows=args.batch)
+                rounds += 1
+                for k, v in r.applied.items():
+                    total[k] = total.get(k, 0) + v
+                if not any(r.applied.values()) or rounds >= args.max_rounds:
+                    break
+            print(r.summary())
+            if total:
+                print("本轮合计:", json.dumps(total, ensure_ascii=False))
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """副本重放之后，投影必须和源一致。"""
+    from .replica import verify
+    with DB(Path(args.src)) as src:
+        with DB(Path(args.db)) as dst:
+            ok, why = verify(src, dst)
+    print(("✅ " if ok else "❌ ") + why)
+    return 0 if ok else 1
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """导出成 JSON。二进制字段已经过 base64——直接 dump bytes 会 TypeError。"""
     with _open(args) as db:
@@ -153,6 +182,17 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--monthly", type=float, default=200.0)
     q.add_argument("--balance", type=float, default=0.0)
     q.set_defaults(fn=cmd_quota)
+
+    sy = sub.add_parser("sync", help="从另一份库拉增量（单向、可断点续传）")
+    sy.add_argument("--src", required=True)
+    sy.add_argument("--node", default="replica")
+    sy.add_argument("--batch", type=int, default=500)
+    sy.add_argument("--max-rounds", type=int, default=50)
+    sy.set_defaults(fn=cmd_sync)
+
+    vf = sub.add_parser("verify", help="比较两份库重放后的投影")
+    vf.add_argument("--src", required=True)
+    vf.set_defaults(fn=cmd_verify)
 
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)
