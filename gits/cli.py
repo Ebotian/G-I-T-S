@@ -368,6 +368,11 @@ def build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--snapshot", action="store_true", help="现在就重选一次")
     pn.set_defaults(fn=cmd_persona)
 
+    im = sub.add_parser("import-seed", help="导入初始化包（默认只校验）")
+    im.add_argument("path")
+    im.add_argument("--write", action="store_true", help="真的写进去")
+    im.set_defaults(fn=cmd_import_seed)
+
     wp = sub.add_parser("wipe", help="清空内容，保留机制（要 --yes）")
     wp.add_argument("--yes", action="store_true", help="真的清（否则只报告）")
     wp.add_argument("--actor", default="her")
@@ -469,6 +474,35 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)
     return p
+
+
+def cmd_import_seed(args: argparse.Namespace) -> int:
+    from gits import seedfile
+
+    db = DB(Path(args.db))
+    path = Path(args.path)
+    if seedfile.inside_repo(path):
+        print("这个文件在仓库里。换到仓库外面再导——文件不进来，状态才进来。")
+        return 1
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"读不到：{exc}")
+        return 1
+    try:
+        bundle = seedfile.parse(text)
+    except seedfile.Bad as exc:
+        print(f"拒绝：{exc}")
+        print("（整份拒绝，一条都没写）")
+        return 1
+    print(seedfile.describe(bundle))
+    if not args.write:
+        print("\n只是校验。要真写就加 --write。")
+        return 0
+    counts = seedfile.apply(db, bundle)
+    print("\n写进去了：" + json.dumps(counts, ensure_ascii=False))
+    print("现在运行一次 replay --restore 让投影跟上")
+    return 0
 
 
 def cmd_wipe(args: argparse.Namespace) -> int:
