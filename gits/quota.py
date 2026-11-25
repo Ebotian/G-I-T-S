@@ -62,6 +62,14 @@ class Budget:
     #: 本地算力配额（不受钱约束，只受机器约束）
     exec_minutes_per_day: int = 20
 
+    #: ── 结转口径：周清日结转 ──
+    #: 周内没花完的会留到后面几天（做得了"连续三天读一个东西"这种项目），
+    #: 但一周结束清零（否则会一路攒成"大事基金"）。
+    week_days: int = 7
+    #: 单日上限 = 日额度 × 这个倍数。**防止一天把整周花光**——
+    #: 结转提供了自由度，也必须配一个速率上限，否则"周额度"就会被当成"当日额度"。
+    burst_factor: float = 2.5
+
 
 @dataclass(frozen=True)
 class Allowance:
@@ -79,6 +87,11 @@ class Allowance:
                 f"≈{u.get('fetch', 0):.0f} 次抓取 · "
                 f"≈{u.get('llm_out', 0) / 1000:.0f}k 输出 token · "
                 f"{u.get('exec_sec', 0) / 60:.1f} 分钟本地算力")
+
+
+def day_cap(b: Budget, a: "Allowance") -> float:
+    """单日能花的上限（含结转）。"""
+    return a.cny * b.burst_factor
 
 
 def autonomy_pool(b: Budget) -> float:
@@ -111,36 +124,33 @@ def allowances(b: Budget, actors: Iterable[str]) -> dict[str, Allowance]:
 
 @dataclass
 class Ledger:
-    """当天已用的账。日清，**不结转**——结转会让她攒额度等大事，
-    然后为了"用掉"而行动，那就变成额度驱动了。"""
+    """周账本 + 日上限。结转是**算出来的**，不是搬来搬去的。
 
+    口径（DESIGN §18.6）：
+
+        周额度 = 日额度 × 7
+        今天能花 = min(日上限, 周额度 − 本周此前已花)
+        周一清零
+
+    为什么用"周锅"而不是"每日余额搬来搬去"：**搬余额会漏**。
+    第一天花掉 2.5（日上限），但那天只"挣"了 0.667，余额就变成负数——
+    负余额要么被忽略（等于可以透支整周），要么变成欠账（等于惩罚）。
+    用周锅一算就干净：**能花的永远不超过本周剩下的**。
+
+    日上限（`burst_factor`）也不能省：只有周额度的话，一周的钱第一天就能花光，
+    那等于没有日额度。
+    """
+
+    week: str
     day: str
+    #: 本周**此前**已经花掉的（不含今天），按人记
+    spent_before: dict[str, float] = field(default_factory=dict)
+    #: 今天已扣的量，按 (人, 类型) 记
     used: dict[tuple[str, str], float] = field(default_factory=dict)
 
+    # ── 账 ──
     def spent(self, actor: str, kind: str) -> float:
         return self.used.get((actor, kind), 0.0)
-
-    def remaining(self, actor: str, kind: str, allow: Allowance) -> float:
-        return max(0.0, allow.units.get(kind, 0.0) - self.spent(actor, kind))
-
-    def charge(self, actor: str, kind: str, amount: float,
-               allow: Allowance) -> tuple[bool, str]:
-        """扣额度。
-
-        **总额是硬的，分项是软的。** 每个 kind 各给一份"如果只花这一类能花多少"，
-        但它们加起来必然超过日额度——真实用法里输入输出比例是未知的，
-        所以真正卡住的是**这个人的日额度**，分项只做提示。
-        """
-        left = self.remaining(actor, kind, allow)
-        if amount > left:
-            return False, f"{actor} 的 {kind} 不够（要 {amount:.0f}，剩 {left:.0f}）"
-
-        cost = amount * UNIT_PRICE.get(kind, 0.0)
-        if self.spent_cny(actor) + cost > allow.cny + 1e-9:
-            return False, (f"{actor} 今天只剩 {allow.cny - self.spent_cny(actor):.3f} 元，"
-                           f"这一步要 {cost:.3f} 元")
-        self.used[(actor, kind)] = self.spent(actor, kind) + amount
-        return True, "ok"
 
     def spent_cny(self, actor: str | None = None) -> float:
         """今天实际花了多少钱。按与额度派生**同一张**单价表换算，否则对不上账。"""
@@ -148,6 +158,57 @@ class Ledger:
                    for (who, kind), amount in self.used.items()
                    if actor is None or who == actor)
 
+    def weekly_budget(self, allow: Allowance, b: Budget) -> float:
+        return allow.cny * b.week_days
+
+    def limit_cny(self, actor: str, allow: Allowance, b: Budget) -> float:
+        """今天能花的上限 = 日上限 与 本周剩余 取小。"""
+        week_left = self.weekly_budget(allow, b) - self.spent_before.get(actor, 0.0)
+        return max(0.0, min(day_cap(b, allow), week_left))
+
+    def remaining_cny(self, actor: str, allow: Allowance, b: Budget) -> float:
+        return max(0.0, self.limit_cny(actor, allow, b) - self.spent_cny(actor))
+
+    def remaining(self, actor: str, kind: str, allow: Allowance) -> float:
+        """分项余量。**只用于展示和估算，不参与准入。**"""
+        return max(0.0, allow.units.get(kind, 0.0) - self.spent(actor, kind))
+
+    # ── 扣 ──
+    def charge(self, actor: str, kind: str, amount: float,
+               allow: Allowance, b: Budget | None = None) -> tuple[bool, str]:
+        """扣额度。
+
+        **钱是唯一的硬约束。** 分项单位（抓取次数、输出 token）只是估算与展示，
+        不参与准入——真实用法里"今天想多读点、少写点"是她的自由，
+        按分项卡死等于替她决定用法。
+
+        硬约束只有两条：**日上限**（防止一天花光整周）和**周额度**。
+        """
+        b = b or Budget()
+        cost = amount * UNIT_PRICE.get(kind, 0.0)
+        if cost > self.remaining_cny(actor, allow, b) + 1e-9:
+            return False, (f"{actor} 今天只剩 {self.remaining_cny(actor, allow, b):.3f} 元，"
+                           f"这一步要 {cost:.3f} 元")
+        self.used[(actor, kind)] = self.spent(actor, kind) + amount
+        return True, "ok"
+
+    # ── 结转 ──
+    def carry_out(self, actor: str, allow: Allowance, b: Budget) -> float:
+        """今天没花完的，自然留在周锅里。**不会因为"没花"而扣分。**"""
+        return self.remaining_cny(actor, allow, b)
+
+    def tomorrow(self) -> "Ledger":
+        """结转的实现就这一行：今天的支出并入"本周此前已花"。"""
+        merged = dict(self.spent_before)
+        for who in {w for (w, _k) in self.used}:
+            merged[who] = self.spent_before.get(who, 0.0) + self.spent_cny(who)
+        return Ledger(week=self.week, day=self.day + "+1", spent_before=merged)
+
+
+def new_week(week: str, day: str) -> Ledger:
+    """周一：周锅清零。这是唯一会"没收"额度的时刻，而且它是对称的——
+    每个人每周一都从同一个起点开始。"""
+    return Ledger(week=week, day=day, spent_before={})
 
 @dataclass(frozen=True)
 class Activity:
