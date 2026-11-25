@@ -63,6 +63,14 @@ chown root:"$GROUP" "$DATA" "$DATA/shared"
 chmod 0750 "$DATA"
 chmod 2770 "$DATA/shared"          # setgid：新建文件自动继承组，不会变成孤零零的私有
 
+# 每个实例的私有目录：只有它自己能进。**必须在搬家之前建好**——
+# 否则 cp 的目标目录还不存在，set -e 会当场中断整个部署（撞过一次）。
+for a in $ACTORS; do
+  mkdir -p "$DATA/$a"
+  chown "$a:$GROUP" "$DATA/$a"
+  chmod 0700 "$DATA/$a"
+done
+
 # 旧版把所有东西都堆在 var/ 下，按用途搬过去（幂等：目标已存在就不动）
 if [ -d "$SRC/var" ]; then
   for f in "$SRC"/var/*; do
@@ -75,13 +83,6 @@ if [ -d "$SRC/var" ]; then
     [ -e "$dest" ] || cp -a "$f" "$dest"
   done
 fi
-
-# 每个实例的私有目录：只有它自己能进
-for a in $ACTORS; do
-  mkdir -p "$DATA/$a"
-  chown "$a:$GROUP" "$DATA/$a"
-  chmod 0700 "$DATA/$a"
-done
 chown -R root:"$GROUP" "$DATA/shared"
 find "$DATA/shared" -type f -exec chmod 0660 {} + 2>/dev/null || true
 find "$DATA/shared" -type d -exec chmod 2770 {} + 2>/dev/null || true
