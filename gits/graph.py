@@ -71,26 +71,48 @@ def strengths(db: DB, *, now: int, kind: str = "mentions") -> dict[str, float]:
     return out
 
 
-def _normalise(rows, now: int) -> list[tuple[str, float]]:
-    vals = [(str(d), effective(float(w), last, now)) for d, w, last in rows]
-    total = sum(v for _d, v in vals)
-    if total <= 0:
-        return []
-    vals.sort(key=lambda kv: -kv[1])
-    return [(d, v / total) for d, v in vals]
+#: Beta 先验的两个伪计数。0.5 = Jeffreys，含义是「一次观察只算一半证据」。
+#: 少样本时它把估计拉向 0.5（不确定），样本多了才让数据说话。
+ALPHA = 0.5
+BETA = 0.5
+
+
+def association(w_eff: float, *, alpha: float = ALPHA,
+                beta: float = BETA) -> float:
+    """这条记忆和这个实体有多强关联，**后验均值**：
+
+        (w + α) / (w + α + β)
+
+    为什么不是行归一化成概率：一件事同时提到 A 和 B，并不意味着它们在
+    竞争一个名额。所以这里的量不是「分布」，而是「关联强度」。
+
+    参考值（α=β=0.5）：
+
+        w=0   → 0.50   没证据 = 不知道，不是「没有」
+        w=1   → 0.75   一次观察不是强证据
+        w=3   → 0.875
+        w=10  → 0.955  数据多了就接近 MLE
+    """
+    return (w_eff + alpha) / (w_eff + alpha + beta)
 
 
 def mentions_of(db: DB, episode: str, *, now: int,
                 kind: str = "mentions") -> list[tuple[str, float]]:
-    """P(实体 | 这条记忆)：这次提到的东西里，各占多少分量。"""
+    """这条记忆提到的实体，各自和它有多强关联（后验均值，降序）。"""
     rows = db.q("SELECT dst, w, last_coact FROM edges"
                 " WHERE src=? AND kind=?", (episode, kind))
-    return _normalise([(r["dst"], r["w"], r["last_coact"]) for r in rows], now)
+    vals = [(str(r["dst"]),
+             association(effective(float(r["w"]), r["last_coact"], now)))
+            for r in rows]
+    return sorted(vals, key=lambda kv: -kv[1])
 
 
 def sources_of(db: DB, entity: str, *, now: int,
                kind: str = "mentions") -> list[tuple[str, float]]:
-    """P(记忆 | 实体)：关于它的记忆里，哪几条分量最大。"""
+    """关于这个实体的记忆，各自的关联强度。**衰减之后谁还算数，一眼能看出来。**"""
     rows = db.q("SELECT src, w, last_coact FROM edges"
                 " WHERE dst=? AND kind=?", (entity, kind))
-    return _normalise([(r["src"], r["w"], r["last_coact"]) for r in rows], now)
+    vals = [(str(r["src"]),
+             association(effective(float(r["w"]), r["last_coact"], now)))
+            for r in rows]
+    return sorted(vals, key=lambda kv: -kv[1])

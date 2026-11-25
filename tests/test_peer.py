@@ -313,3 +313,28 @@ def test_漂移围绕新的锚点走(db) -> None:
     attention.step(db, pair=("peer1", "peer2"), now=T0 + DAY)
     after = db.scalar("SELECT base_weight FROM attention WHERE actor_id='peer1'")
     assert after < before, "step 里先估锚点，锚点朝中性挪了"
+
+
+# ── 贝叶斯：少样本时不要过度自信 ────────────────────────────
+
+
+def test_一次提及不该把锚点推满(db) -> None:
+    """"""
+    assert attention._target(1.0, 1.0) == pytest.approx(1.0, abs=0.01), \
+        "n=1、avg=1 → 相对频率就是平均，加上收缩更是几乎不动"
+    # 相对平均的 4 倍（原始目标 7），但只看过 1 份——收缩到 2.5，而不是 7
+    assert attention._target(1.0, 0.25) == pytest.approx(2.5)
+
+
+def test_证据多了收缩就松开(db) -> None:
+    tiny = attention._target(1.0, 0.25)          # n=1
+    many = attention._target(20.0, 0.25)         # n=20，更强的相对频率
+    assert tiny == pytest.approx(2.5)
+    assert many == pytest.approx(attention.WEIGHT_RANGE[1]), \
+        "证据足够就顶到上界——那时候是数据在说话，不是先验"
+
+
+def test_收缩不会把方向搞反(db) -> None:
+    for n in (1.0, 3.0, 10.0):
+        assert attention._target(n, 1.0) >= 1.0
+        assert attention._target(1.0, n) <= 1.0

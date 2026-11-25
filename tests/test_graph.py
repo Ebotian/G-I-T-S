@@ -38,17 +38,30 @@ def _link(db: DB, src: str, dst: str, ts: int, w: float = 1.0) -> None:
 def test_三年前的不该和昨天一样重(db) -> None:
     _link(db, "n:old", "e:x", T0)
     _link(db, "n:new", "e:x", T0 + 365 * DAY)
-    got = graph.sources_of(db, "e:x", now=T0 + 365 * DAY)
-    probs = dict(got)
-    assert probs["n:new"] > probs["n:old"] * 3, "衰减没生效"
+    got = dict(graph.sources_of(db, "e:x", now=T0 + 365 * DAY))
+    assert got["n:new"] > got["n:old"] + 0.2, "衰减没生效"
 
 
-def test_概率行和是一(db) -> None:
-    for i in range(5):
-        _link(db, f"n:{i}", "e:x", T0 + i * DAY)
-    got = graph.sources_of(db, "e:x", now=T0 + 10 * DAY)
-    assert len(got) == 5
-    assert sum(p for _d, p in got) == pytest.approx(1.0)
+def test_没证据时是半_不是零也不是一(db) -> None:
+    """Beta(0.5, 0.5) 后验均值：w=0 → 0.5，w=1 → 0.75。"""
+    assert graph.association(0.0) == pytest.approx(0.5)
+    assert graph.association(1.0) == pytest.approx(0.75)
+    assert graph.association(100.0) > 0.99
+    xs = [graph.association(w) for w in (0, 1, 3, 10, 100)]
+    assert xs == sorted(xs), "必须单调"
+    assert all(0 < x < 1 for x in xs)
+
+
+def test_一次观察不该等于满值(db) -> None:
+    """少样本起点：只看过一次，就只该有一点点关联。"""
+    _link(db, "n:a", "e:x", T0)
+    got = dict(graph.sources_of(db, "e:x", now=T0))
+    assert got["n:a"] == pytest.approx(0.75), "MLE 会给 1.0，那是过度自信"
+
+
+def test_样本多了就接近极大似然(db) -> None:
+    for i in range(50):
+        _link(db, "n:a", "e:x", T0 + i)
 
 
 def test_重放是确定的(db, tmp_path: Path) -> None:

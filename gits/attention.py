@@ -152,6 +152,9 @@ def overlap_pressure(overlap: float | None, *, baseline: float = 0.15,
 OBSERVE_LAMBDA = 0.05     # 每天锚点朝观测值挪多少
 NEUTRAL = 1.0             # 没被提到 = 中性，不是 0（0 会让它永不可能被想起）
 WINDOW_DAYS = 7           # 观测窗口
+#: 收缩强度：相当于「几个伪观测」。n=1 时置信 0.25，n=9 时 0.75。
+#: 少样本起点，宁可慢一点，也别被一次提及推歪。
+SHRINK_K = 3.0
 MIN_MENTIONS = 3          # 从数据里新建话题的最低门槛
 MAX_TOPICS = 32
 ANCHOR_EPS = 0.01         # 挪动小于这个就不记事件
@@ -181,11 +184,23 @@ def _mentions(db: DB, *, now: int,
 
 
 def _target(n: float, avg: float) -> float:
-    """提到次数 -> 目标锚点。没提到就是中性 1.0。"""
+    """提及分量 -> 目标锚点。**样本少就少动。**
+
+    先用相对频率算一个「原始目标」，再按证据量往中性 1.0 收缩：
+
+        置信 = n / (n + K)
+        目标 = 1 + (原始目标 − 1) × 置信
+
+    这是共轭先验下后验均值的形状：K 相当于「几个伪观测」。
+    理由很实际——现在是少样本起点，一次提及不该把锚点推满；
+    而 w 本身已经带衰减，所以这里的 n 是**有效样本量**，不是累计次数。
+    """
     if n <= 0:
         return NEUTRAL
     lo, hi = WEIGHT_RANGE
-    return float(min(hi, max(lo, 1.0 + 2.0 * (n / max(1e-9, avg) - 1.0))))
+    raw = 1.0 + 2.0 * (n / max(1e-9, avg) - 1.0)
+    conf = n / (n + SHRINK_K)
+    return float(min(hi, max(lo, 1.0 + (raw - 1.0) * conf)))
 
 
 def reestimate(db: DB, actor: str, *, now: int) -> dict[str, float]:
