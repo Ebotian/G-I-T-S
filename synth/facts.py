@@ -175,6 +175,10 @@ def generate(*, days: int = 90, seed: int = 7, start: int = 1_800_000_000_000,
 
     # ── 查询 ──
     by_id = {f.id: f for f in fs.facts}
+    #: 上下文里必须用**名字**而不是实体 id。用 id 的话上下文对检索毫无帮助——
+    #: 这是我自己埋的一个坑：第一版上下文写的是 "e003 偏好 想换掉"，
+    #: 而节点正文是 "物03 偏好 想换掉"，两者一个词都不重叠。
+    ent_name = {e.id: e.name for e in fs.entities}
     for _ in range(n_queries):
         qt = int(rng.integers(start + 10 * DAY, end))
         recent = [m for m in fs.mentions if qt - 14 * DAY <= m.ts < qt]
@@ -205,8 +209,9 @@ def generate(*, days: int = 90, seed: int = 7, start: int = 1_800_000_000_000,
         # 上下文：问之前刚聊过的两条（同实体的最近提及）
         prior = [m for m in fs.mentions if m.ts < qt and m.fact in {f.id for f in alive}]
         prior = sorted(prior, key=lambda m: -m.ts)[:2]
-        ctx = " ".join(f"{by_id[m.fact].entity} {by_id[m.fact].predicate} "
-                       f"{by_id[m.fact].value}" for m in prior)
+        ctx = " ".join(
+            f"{ent_name.get(by_id[m.fact].entity, '')} {by_id[m.fact].predicate} "
+            f"{by_id[m.fact].value}" for m in prior)
 
         fs.queries.append(Query(
             ts=qt, entity=fact.entity,

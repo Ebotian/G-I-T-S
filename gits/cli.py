@@ -106,6 +106,41 @@ def cmd_quota(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_recall(args: argparse.Namespace) -> int:
+    """她此刻能想起什么。走真实的 nodes / node_content / FTS / r。"""
+    from .recall import recall
+    with _open(args) as db:
+        rows = recall(db, args.query, context=args.context or "",
+                      now_ms=args.now or now_ms(), k=args.k)
+        if not rows:
+            print("（什么都没想起来）")
+            return 0
+        for r in rows:
+            print(f"{r.score:5.3f}  r={r.r:4.2f}  {r.line()}")
+    return 0
+
+
+def cmd_turn(args: argparse.Namespace) -> int:
+    """拼出一轮的 prompt（A/B/C）。用来看「她记得什么」到底长什么样。"""
+    from .context import PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket
+    from .recall import lines, recall
+    with _open(args) as db:
+        t = args.now or now_ms()
+        rows = recall(db, args.text, context=args.context or "", now_ms=t, k=args.k)
+        prompt = assemble(
+            PersonaSeed(narrative=args.narrative, version=1),
+            RelationSnapshot(bucket=bucket(t), summary="（B 段先留空）",
+                             hubs=(), phase="醒着"),
+            TurnContext(stimulus=args.text, recalled=lines(rows),
+                        quota_hint="额度[░░░░░░░░] 0%0.7/2.0元"),
+        )
+        print(prompt.text)
+        b = prompt.budget()
+        print(f"--- a={b['a']} b={b['b']} c={b['c']} total={b['total']} tokens"
+              f" · a_hash={prompt.a_hash[:12]}")
+    return 0
+
+
 def cmd_trace(args: argparse.Namespace) -> int:
     with _open(args) as db:
         print(json.dumps(trace(db, args.outbox_id), ensure_ascii=False, indent=2))
@@ -193,6 +228,21 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="比较两份库重放后的投影")
     vf.add_argument("--src", required=True)
     vf.set_defaults(fn=cmd_verify)
+
+    rc = sub.add_parser("recall", help="她现在能想起什么")
+    rc.add_argument("query")
+    rc.add_argument("--context", default="")
+    rc.add_argument("--k", type=int, default=5)
+    rc.add_argument("--now", type=int, default=0)
+    rc.set_defaults(fn=cmd_recall)
+
+    tn = sub.add_parser("turn", help="拼出一轮 prompt（A/B/C）")
+    tn.add_argument("text")
+    tn.add_argument("--context", default="")
+    tn.add_argument("--narrative", default="我不太会哄人。但我记得住你说过的话。")
+    tn.add_argument("--k", type=int, default=5)
+    tn.add_argument("--now", type=int, default=0)
+    tn.set_defaults(fn=cmd_turn)
 
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)

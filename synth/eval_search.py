@@ -42,11 +42,14 @@ class Report:
                 f"   |  找对实体 {self.entity_hit:.2f}")
 
 
-def build_index(fs: Facts) -> sqlite3.Connection:
+def build_index(fs: Facts, *, upto_ms: int | None = None) -> sqlite3.Connection:
+    """`upto_ms` 用来把「未来才出现的事实」挡在索引外——不然评测会作弊。"""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     names = {e.id: e.name for e in fs.entities}
     for f in fs.facts:
+        if upto_ms is not None and f.born >= upto_ms:
+            continue
         index_node(conn, f.id, f"{names.get(f.entity, '')} {f.predicate} {f.value}")
     return conn
 
