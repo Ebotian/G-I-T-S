@@ -1008,7 +1008,12 @@ worker@cloud     ECS 上的兜底 worker
 ## 16. 待办：P0 的表结构
 
 
-现在已经十张表了，且分属两个库（§11.8-5）。下一步是把它们一次定死：
+表结构落了一份草案：[`docs/schema.md`](schema.md)。**它不是契约**——只有 `events` 贵，别的表都是投影，随时可以删了重建：
+
+> 讨论顺序应该是反的：**先把 `events` 想清楚，别的先随手写，反正要重建。**
+> 这不是偷懒的借口，是把设计的力气花在改起来贵的地方。
+
+草案里同时列了**故意留白**的地方（`nodes.kind` 的枚举、向量放哪、`edges.kind` 要不要 causal），见到真实数据再定。
 
 ```
 gits-events.db   events
@@ -1018,6 +1023,6 @@ gits-graph.db    nodes · node_content · aliases · edges
 gits-rhythm.db   （或并入 graph）presence_kde · changepoints · state_snapshot
 ```
 
-定下来之后才真正可以开始写代码——在此之前每讨论一个新机制，表都要改。
+迁移纪律写在草案 §6：每次改表一条 SQL + `user_version` 递增；派生库永远可以整库删除重放。**开发期间随便改，改了就记一笔。**
 
 
