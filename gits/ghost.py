@@ -103,6 +103,11 @@ class Ghost:
     #: 抽取是后台活，没人在等——放慢一点，别和回话抢 timeout。
     extract_ms: int = 2_000
     _last_extract: int = 0
+    #: 窗口决策。慢一点没关系——它只在积压时才有活干。
+    ctx_ms: int = 60_000
+    _last_ctx: int = 0
+    #: 整理一次大概要多久。先拍 20 秒，之后用实测中位数替换。
+    compact_ms_est: int = 20_000
     _last_beat: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
@@ -173,7 +178,35 @@ class Ghost:
             got = self.extract(t)
             if got:
                 did["extract"] = got
+        if t - self._last_ctx >= self.ctx_ms:
+            got = self.window(t)
+            if got:
+                did["ctx"] = got
         return did
+
+    def window(self, t: int | None = None) -> str:
+        """该不该换窗。**整理是后台活，先在闲得够久的时候做。**"""
+        from gits import ctxwin
+        from gits.compact import compact
+        from gits.idle import estimate
+
+        t = now_ms() if t is None else t
+        self._last_ctx = t
+        plan = ctxwin.plan(self.db, now=t, idle=estimate(self.db, t),
+                           compact_ms=self.compact_ms_est)
+        if plan.action in ("compact_idle", "compact_force"):
+            try:
+                got = compact(self.db, now=t, reason=plan.reason)
+            except Exception as exc:
+                self.last_error = f"compact: {type(exc).__name__}: {exc}"
+                return f"{plan.action} 失败"
+            if got is not None:
+                self.last_error = ""
+                return f"{plan.action} → 窗 {got.window_id}（{got.summary[:20]}…）"
+        elif plan.action == "new_window":
+            ctxwin.open_window(self.db, ts=t)
+            return "new_window"
+        return ""
 
     def extract(self, t: int | None = None) -> int:
         """把还没抽过的消息抽成图上的节点。

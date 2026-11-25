@@ -14,8 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from gits import ctxwin
 from gits.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
-                       bucket, messages)
+                          bucket, messages)
 from gits.db import DB, Writer, now_ms
 from gits.llm import Reply, chat, cost_cny
 from gits.recall import lines, recall
@@ -98,6 +99,13 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
     reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
+
+    # 记账：窗口长度和命中数都用 API 返回的，不估算（估错了预算就假了）。
+    win = ctxwin.current(db) or {"id": ctxwin.open_window(db, ts=now)}
+    ctxwin.record(db, win["id"],
+                  tokens=int(reply.usage.get("prompt_tokens") or 0),
+                  hit_tokens=int(reply.usage.get("prompt_cache_hit_tokens") or 0),
+                  event_id=event["id"])
 
     call_id = Writer(db).append_model_call(
         kind="reply", model=reply.model, response=reply.text,

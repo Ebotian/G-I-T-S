@@ -165,6 +165,22 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "consolidate":
+        # 整理结果**就是事件内容本身**，不需要模型结果——
+        # 这正是「整理不是丢弃、是写下来」的实现：重放时它原样还在。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            obj = {"summary": response}
+        nid = node_id_for(row["source"], row["ext_id"])
+        conn.execute(
+            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
+            " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+            (nid, "self", row["ts"], "self:her", 1.0, 1.0, row["ts"]))
+        conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                     " VALUES(?,?,?)",
+                     (nid, str(obj.get("summary", "")).strip(), row["ts"]))
+        return
     if row["kind"] not in ("msg_in", "inner"):
         return
     try:
@@ -191,7 +207,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
         )
     }
 
-    sql = "SELECT * FROM events WHERE kind IN ('msg_in','inner')"
+    sql = "SELECT * FROM events WHERE kind IN ('msg_in','inner','consolidate')"
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -208,7 +224,10 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
         for row in db.conn.execute(sql, args).fetchall():
             if row["id"] in dead:      # 删掉的不参与重放
                 continue
-            response = calls.get(row["id"])
+            # 整理事件自带内容；其余类型才需要模型结果。
+            response = (row["payload"].decode("utf-8", "replace")
+                        if row["kind"] == "consolidate"
+                        else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(
                     f"event {row['id']} ({row['source']}/{row['ext_id']}) 没有已保存的模型结果；"
