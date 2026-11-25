@@ -42,7 +42,8 @@ def _key() -> str:
 
 def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 300,
          temperature: float = 1.0, safety_check: bool = False,
-         thinking: bool = False, timeout: float = 60.0) -> Reply:
+         thinking: bool = False, effort: str = "high",
+         timeout: float = 60.0) -> Reply:
     """一次非流式调用。
 
     thinking 必须显式关掉。DeepSeek 默认是思考模式：实测 max_tokens=40 时，
@@ -57,6 +58,10 @@ def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 
         "stream": False,
     }
     body["thinking"] = {"type": "enabled" if thinking else "disabled"}
+    if thinking:
+        # 实测：effort=banana 会被 422 拒绝（unknown variant），说明这个字段
+        # 确实被解析。前台回话关思考，后台抽取开 high——她该想多深想多深。
+        body["reasoning_effort"] = effort
     if safety_check:
         body["safety_check"] = {"level": "high"}
 

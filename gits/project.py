@@ -89,30 +89,85 @@ def dump_projection(db: DB) -> Projection:
     )
 
 
+def entity_id(name: str) -> str:
+    """实体的稳定 id。同名同 id——这是跨消息合并的唯一依据。"""
+    h = hashlib.sha256(("entity\x00" + name.strip()).encode()).hexdigest()[:16]
+    return f"e:{h}"
+
+
+def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> str:
+    """**唯一的**落图入口。实时抽取和恢复重放都必须走这里。
+
+    分开写两份的话，重放出来的图会少一批节点——而这个差异要等
+    真正的灾难恢复时才会被发现。返回 episode 节点 id。
+    """
+    kind = row["kind"]
+    ts = row["ts"]
+    nid = node_id_for(row["source"], row["ext_id"])
+    scope = "self:her" if kind == "inner" else "world"
+
+    conn.execute(
+        "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
+        " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+        (nid, "episode" if kind == "msg_in" else "self", ts, scope,
+         1.0, 1.0, ts))
+    conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                 " VALUES(?,?,?)", (nid, str(payload.get("summary", "")).strip(), ts))
+
+    def touch(nid_: str, name: str) -> None:
+        conn.execute(
+            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
+            " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+            (nid_, "entity", ts, "world", 1.0, 1.0, ts))
+        conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                     " VALUES(?,?,?)", (nid_, name, ts))
+
+    def link(a: str, b: str, w: float, edge_kind: str) -> None:
+        conn.execute(
+            "INSERT INTO edges(src, dst, w, kind, t_created, last_coact)"
+            " VALUES(?,?,?,?,?,?) ON CONFLICT(src, dst, kind) DO UPDATE SET"
+            "   w = w + excluded.w, last_coact = excluded.last_coact",
+            (a, b, w, edge_kind, ts, ts))
+
+    for e in payload.get("entities") or []:
+        name = str(e.get("name", "")).strip() if isinstance(e, dict) else str(e).strip()
+        if not name:
+            continue
+        eid = entity_id(name)
+        touch(eid, name)
+        # 这件事提到了这个实体——边是「共同出现」，不是「是」。
+        link(nid, eid, 1.0, "mentions")
+
+    for cl in payload.get("claims") or []:
+        if not isinstance(cl, dict):
+            continue
+        subj = str(cl.get("subject", "")).strip()
+        obj = str(cl.get("object", "")).strip()
+        pred = str(cl.get("predicate", "")).strip()
+        if not (subj and obj and pred):
+            continue
+        a, b = entity_id(subj), entity_id(obj)
+        touch(a, subj)
+        touch(b, obj)
+        link(a, b, 0.5, f"rel:{pred[:24]}")
+    return nid
+
+
 def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     """把一条"事件 + 它的模型结果"落成投影。
 
-    P0 的规则故意简单，但必须是**确定性**的：
-      msg_in  → 一个 episode 节点，内容 = 模型抽取出来的那句摘要
-      inner   → 一个 self 节点（她自己的独白）
-      其余    → 不进投影（心跳、可观测性之类）
+    结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
+    两种都得认——否则老事件重放时会被静默丢掉。
     """
-    kind = row["kind"]
-    if kind not in ("msg_in", "inner"):
+    if row["kind"] not in ("msg_in", "inner"):
         return
-
-    nid = node_id_for(row["source"], row["ext_id"])
-    scope = "self:her" if kind == "inner" else "world"
-    conn.execute(
-        "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
-        " VALUES(?,?,?,?,?,?,?)"
-        " ON CONFLICT(id) DO NOTHING",
-        (nid, "episode" if kind == "msg_in" else "self", row["ts"], scope, 1.0, 1.0, row["ts"]),
-    )
-    conn.execute(
-        "INSERT INTO node_content(node_id, content, created_ts) VALUES(?,?,?)",
-        (nid, response, row["ts"]),
-    )
+    try:
+        obj = json.loads(response[response.index("{"): response.rindex("}") + 1])
+        if not isinstance(obj, dict) or not str(obj.get("summary", "")).strip():
+            raise ValueError
+    except (ValueError, json.JSONDecodeError):
+        obj = {"summary": response, "entities": [], "claims": []}
+    apply_payload(conn, row, obj)
 
 
 def restore(db: DB, *, until_event_id: int | None = None) -> int:

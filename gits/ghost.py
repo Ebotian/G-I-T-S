@@ -100,6 +100,9 @@ class Ghost:
     reply_ms: int = 1_000
     persona_path: str | None = None
     _last_reply: int = 0
+    #: 抽取是后台活，没人在等——放慢一点，别和回话抢 timeout。
+    extract_ms: int = 2_000
+    _last_extract: int = 0
     _last_beat: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
@@ -166,7 +169,29 @@ class Ghost:
             got = self.reply(t)
             if got:
                 did["reply"] = got
+        if t - self._last_extract >= self.extract_ms:
+            got = self.extract(t)
+            if got:
+                did["extract"] = got
         return did
+
+    def extract(self, t: int | None = None) -> int:
+        """把还没抽过的消息抽成图上的节点。
+
+        **先回话，再抽取**：回话时那条消息本身就在 C 段里，不缺它；
+        而抽取开着 thinking，慢一点无所谓。
+        """
+        from gits.extract import extract, pending
+
+        self._last_extract = now_ms() if t is None else t
+        n = 0
+        for ev in pending(self.db, limit=1):
+            try:
+                extract(self.db, ev)
+                n += 1
+            except Exception as exc:                 # 解析失败不能带走进程
+                self.last_error = f"extract {ev['id']}: {type(exc).__name__}: {exc}"
+        return n
 
     def reply(self, t: int | None = None) -> int:
         """该回的话回一句。失败**不重试到天荒地老**——记下来，下一拍再说。"""

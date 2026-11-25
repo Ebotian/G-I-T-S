@@ -17,6 +17,7 @@ from pathlib import Path
 from gits.context import PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket
 from gits.db import DB, Writer, now_ms
 from gits.llm import Reply, chat, cost_cny
+from gits.recall import lines, recall
 
 DEFAULT_PERSONA = "我不太会哄人。但我记得住你说过的东西。"
 
@@ -52,6 +53,24 @@ def recent(db: DB, n: int = 6) -> tuple[tuple[str, str], ...]:
     return tuple(out)
 
 
+def relation(db: DB, *, now: int) -> RelationSnapshot:
+    """B 段。**一小时内逐字不变**——所以只能放"这个小时都成立"的东西。
+
+    hubs 取最近一再出现的实体；它决定她"顺手会提谁"。现在只有计数，
+    等抽取攒够了几百条，这里换成中心度会更有意义。
+    """
+    n = db.scalar("SELECT count(*) FROM nodes WHERE kind='episode'") or 0
+    first = db.scalar("SELECT min(born_ts) FROM nodes WHERE kind='episode'")
+    days = max(1, ((now or first or now) - (first or now)) // 86_400_000 + 1)
+    hubs = tuple(str(r["content"]) for r in db.q(
+        "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
+        " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
+    return RelationSnapshot(
+        bucket=bucket(now),
+        summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
+        hubs=hubs, phase="醒着")
+
+
 def pending(db: DB, *, limit: int = 3) -> list[dict]:
     """还没被回过、也没被放弃过的 msg_in。"""
     return [dict(r) for r in db.q(
@@ -67,11 +86,14 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     now = now or now_ms()
     text = (event["payload"] or b"").decode("utf-8", "replace")
 
+    # C 段：这一轮才有的东西。**检索在这里发生**——上下文扩展 + r。
+    history = recent(db)
+    hits = recall(db, text, context=" ".join(t for _w, t in history),
+                  now_ms=now, k=5)
     prompt = assemble(
         persona or load_persona(None),
-        RelationSnapshot(bucket=bucket(now), summary="（还没有关系状态）",
-                         hubs=(), phase="醒着"),
-        TurnContext(stimulus=text, recent=recent(db), recalled=()),
+        relation(db, now=now),
+        TurnContext(stimulus=text, recent=history, recalled=lines(hits)),
     )
     reply = chat(
         [{"role": "system", "content": prompt.text},
