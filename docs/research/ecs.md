@@ -225,3 +225,51 @@ OSError: [Errno 30] Read-only file system: 'var'
 
 改成显式 `--out /var/lib/gits/outbox.jsonl`。
 教训不是「记得改路径」，是：**工作目录的语义变了，所有隐含依赖它的东西都要重新过一遍**。
+
+## 8. 一个组，每个实例一个用户（2026-11-25 修订 §7）
+
+```
+her / peer1 / peer2   →  组 gits，各自 nologin
+
+/var/lib/gits/shared   2770 root:gits   库、投递箱（setgid：新文件继承组）
+/var/lib/gits/her      0700 her:gits    凭据、游标、persona
+/var/lib/gits/peer1    0700 peer1:gits
+/var/lib/gits/peer2    0700 peer2:gits
+```
+
+同组 = 能协作；不同用户 = **哪个进程写了什么是确定的**。
+systemd 的 `ReadWritePaths` 也只给自己那一份，两层叠加。
+
+实测：
+
+```
+sudo -u peer1 ls /var/lib/gits/her    → Permission denied
+sudo -u her   ls /var/lib/gits/peer1  → Permission denied
+sudo -u peer1 ls /var/lib/gits/shared → gits.db  gits.db-wal  ...
+```
+
+### 8.1 这层隔离到什么程度
+
+| 范围 | 隔离了吗 |
+|---|---|
+| 设计仓库（docs / .git） | 是，三层 |
+| 各自的私有目录（凭据 / persona / 游标） | 是，0700 |
+| **共享库里的私有记忆域** | **没有** |
+
+最后一行必须说清楚：库在 `shared` 里，同组可读，
+所以 peer 进程理论上能读到 `self:her` 的节点。
+逻辑上的 `scope` 门防的是「代码写错」，不防「同组进程直接读库」。
+
+要真解决只有两条路：每个实例一个库（+ 同步），或者加密库（每个实例一把钥匙）。
+两条都比现在的机制大一档，**等真有第二个实例在跑再决定**。
+
+### 8.2 撞上的坑：装的顺序
+
+```
+cp: cannot create regular file '/var/lib/gits/her/persona.md': No such file
+```
+
+因为 `set -e` + 搬家这一步跑在「建私有目录」之前。中断的位置又在 units 安装之前，
+于是服务指向了新路径、而新路径还没建好——两个服务同时起不来。
+
+顺序必须是：**建目录 → 搬家 → 收尾权限**。
