@@ -117,7 +117,8 @@ def cmd_ghost(args: argparse.Namespace) -> int:
         print("警告：--outbox-file 已废弃，投递搬到 gits shell", file=sys.stderr)
     with _open(args):
         pass                                  # 只为建库/迁移，随后 serve 自己开
-    return _asyncio.run(serve(args.db, node=args.node, once=args.once))
+    return _asyncio.run(serve(args.db, node=args.node,
+                              persona_path=args.persona, once=args.once))
 
 
 def cmd_shell(args: argparse.Namespace) -> int:
@@ -370,6 +371,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gh = sub.add_parser("ghost", help="常驻内核（心跳/投递/快照）")
     gh.add_argument("--node", default="cloud")
+    gh.add_argument("--persona", default=None, help="A 段人格文件（一天换一次）")
     gh.add_argument("--outbox-file", default=None, help="投递到文件（没有真通道时）")
     gh.add_argument("--once", action="store_true", help="只跑一拍就退出（测试用）")
     gh.set_defaults(fn=cmd_ghost)

@@ -95,9 +95,15 @@ class Ghost:
     event_beat_ms: int = 60 * 60_000
     #: 快照/重建索引间隔
     snapshot_ms: int = 15 * 60_000
+    #: 回复间隔。每拍最多回一条——一次调用要几秒，
+    #: 不能让它把心跳和快照挤掉。
+    reply_ms: int = 1_000
+    persona_path: str | None = None
+    _last_reply: int = 0
     _last_beat: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
+    last_error: str = ""
 
     def __post_init__(self) -> None:
         self.w = Writer(self.db)
@@ -156,14 +162,32 @@ class Ghost:
         if t - self._last_snapshot >= self.snapshot_ms or not self._last_snapshot:
             self.snapshot(t)
             did["snapshot"] = True
+        if t - self._last_reply >= self.reply_ms:
+            got = self.reply(t)
+            if got:
+                did["reply"] = got
         return did
+
+    def reply(self, t: int | None = None) -> int:
+        """该回的话回一句。失败**不重试到天荒地老**——记下来，下一拍再说。"""
+        from gits.respond import load_persona, respond_pending
+
+        self._last_reply = now_ms() if t is None else t
+        try:
+            turns = respond_pending(self.db, limit=1,
+                                    persona=load_persona(self.persona_path))
+        except Exception as exc:                     # 模型挂了不能带走进程
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return 0
+        self.last_error = ""
+        return len(turns)
 
 
 async def serve(db_path: str | Path, *, node: str = "cloud",
-                once: bool = False) -> int:
+                persona_path: str | None = None, once: bool = False) -> int:
     """常驻循环。SIGTERM 时**把手上这一拍做完再退**。"""
     db = DB(db_path)
-    ghost = Ghost(db=db, node=node)
+    ghost = Ghost(db=db, node=node, persona_path=persona_path)
 
     def _stop(*_: object) -> None:
         ghost.stopped = True
