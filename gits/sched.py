@@ -107,6 +107,13 @@ def eligible(node: Node, task: Task, h: Health) -> tuple[bool, str]:
             f"数据太旧（任务容忍 {task.staleness_max_ms // 60_000}min，"
             f"该节点 {node.sync_period_ms // 60_000}min 才同步一次）"
         )
+    # ★ 计划周期只是下限。一个"本该每 5 分钟同步"但实际 40 分钟没更新的节点，
+    # 拿到的就是 40 分钟前的数据——所以还要看**实际**新鲜度。
+    if h.freshness_ms > task.staleness_max_ms:
+        return False, (
+            f"实际数据已 {h.freshness_ms // 60_000}min 没更新，"
+            f"超过任务容忍的 {task.staleness_max_ms // 60_000}min"
+        )
     for net in task.needs_net:
         if net not in node.reach:
             return False, f"网络不可达（需要 {net}）"

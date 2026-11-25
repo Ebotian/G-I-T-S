@@ -37,7 +37,8 @@ python -m gits.cli --db /tmp/g.db trace 1
 | `gate.py` | `开口价值 = 未解释 × 可解释 × (1-积压) × 温度 × 0.85^n`，每个决策必带 `reason` |
 
 ```bash
-uv run --python 3.10 --with pytest --with numpy python -m pytest tests -q   # 38 passed
+uv run --python 3.10 --with pytest --with numpy --with statsmodels \
+  python -m pytest tests -q          # 108 passed（+1 slow）
 ```
 
 ## 合成数据（`synth/`）

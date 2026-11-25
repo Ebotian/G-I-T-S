@@ -199,10 +199,16 @@ class Writer:
             )
 
     def redact_event(self, event_id: int) -> None:
-        """删除 = 一条事件 + 清 payload（DESIGN §15.8.1）。"""
+        """删除 = 一条事件 + 清 payload **和模型结果**（DESIGN §15.8.1）。
+
+        只清 payload 是不够的：抽取响应里同样有正文，重放会把它读出来
+        重新造出节点。所以两边一起清。
+        """
         ts = now_ms()
         with self.txn() as c:
             c.execute("UPDATE events SET payload=NULL WHERE id=?", (event_id,))
+            c.execute("UPDATE model_calls SET response=NULL, request=NULL"
+                      " WHERE event_id=?", (event_id,))
             c.execute(
                 "INSERT INTO redactions(event_id, ts) VALUES(?,?)"
                 " ON CONFLICT(event_id) DO NOTHING",

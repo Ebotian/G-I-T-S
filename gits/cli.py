@@ -51,21 +51,38 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_say(args: argparse.Namespace) -> int:
     """合成数据入口：写一条 msg_in，并配一份"模型结果"。
 
-    真实形态里这一步是 LLM 抽取；P0 用一个确定性桩，好让重放测试可重复。
+    ★ 事件与模型结果**在同一个事务里**。分两次提交的话，中间崩一次就会留下
+    "有事件、没结果"的半成品；而重试用的是同一个 ext_id，会被幂等键挡掉，
+    于是这条事件永远补不上结果，恢复重放直接失败（外部评审复现过）。
     """
     with _open(args) as db:
         w = Writer(db)
         ts = now_ms()
-        ev_id, created = w.append_event(
-            source=args.source, kind="msg_in", ext_id=args.ext_id or f"cli:{ts}",
-            ts=ts, recv_ts=ts, payload=args.text.encode(),
-        )
-        if created:
-            w.append_model_call(
-                kind="extract", model="stub:v0", event_id=ev_id,
-                response=args.text.strip()[:60],
+        ext_id = args.ext_id or f"cli:{ts}"
+        with w.txn() as c:
+            cur = c.execute(
+                "INSERT INTO events(ts, recv_ts, source, kind, ext_id, payload, lag, ts_trust)"
+                " VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source, ext_id) DO NOTHING",
+                (ts, ts, args.source, "msg_in", ext_id, args.text.encode(), 0, 1),
             )
-        print(json.dumps({"event_id": ev_id, "created": created}, ensure_ascii=False))
+            created = bool(cur.rowcount)
+            row = c.execute("SELECT id FROM events WHERE source=? AND ext_id=?",
+                            (args.source, ext_id)).fetchone()
+            ev_id = int(row["id"])
+            # ★ 不管是不是新建，都要保证结果存在。
+            # 上次如果崩在"写完事件、还没写结果"之间，重试会走进 created=False，
+            # 于是这条事件永远没有抽取结果——恢复重放会直接失败。
+            c.execute(
+                "INSERT INTO model_calls(ts, kind, model, response, event_id, producer)"
+                " SELECT ?,?,?,?,?,? WHERE NOT EXISTS ("
+                "   SELECT 1 FROM model_calls WHERE event_id=? AND kind='extract')",
+                (now_ms(), "extract", "stub:v0", args.text.strip()[:60],
+                 ev_id, "cloud/stub@v0", ev_id),
+            )
+            repaired = (not created) and c.execute(
+                "SELECT changes()").fetchone()[0] > 0
+        print(json.dumps({"event_id": ev_id, "created": created,
+                          "repaired": bool(repaired)}, ensure_ascii=False))
     return 0
 
 
@@ -83,9 +100,10 @@ def cmd_trace(args: argparse.Namespace) -> int:
 
 
 def cmd_export(args: argparse.Namespace) -> int:
+    """导出成 JSON。二进制字段已经过 base64——直接 dump bytes 会 TypeError。"""
     with _open(args) as db:
         json.dump(export_logset(db), sys.stdout, ensure_ascii=False)
-        print()
+        sys.stdout.write("\n")
     return 0
 
 

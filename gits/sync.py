@@ -35,6 +35,7 @@ class Stream:
     consumers: tuple[str, ...]
     staleness_max_ms: int     # 消费方最多能忍多久
     why: str = ""
+    critical: bool = False    # 无论节点周期多长都必须传（删除属于这类）
 
     @property
     def syncable(self) -> bool:
@@ -58,7 +59,8 @@ STREAMS: tuple[Stream, ...] = (
     Stream("observability", 1, "both", ("rhythm",), HOUR,
            "「她当时看不看得见」——缺了它会把断线学成不在"),
     Stream("redactions", 1, "both", ("privacy",), 10 * MIN,
-           "删除必须尽快传导；比新增更急"),
+           "删除必须尽快传导；比新增更急——漏一次就永远补不回来",
+           critical=True),
     Stream("nodes", 2, "none", (), 0, "从日志集重放，不传"),
     Stream("edges", 2, "none", (), 0, "从日志集重放，不传"),
     Stream("embedding", 3, "none", ("memory",), HOUR,
@@ -99,12 +101,17 @@ def plan(node_id: str, *, sync_period_ms: int, freshness_ms: int,
         if not s.syncable:
             out.append(SyncPlan(s.name, s.tier, "skip", "不传（重放或不可移植）"))
             continue
-        if s.staleness_max_ms < sync_period_ms:
+        if s.staleness_max_ms < sync_period_ms and not s.critical:
             out.append(SyncPlan(
                 s.name, s.tier, "skip",
                 f"做不到：容忍 {s.staleness_max_ms // MIN}min，"
                 f"本节点 {sync_period_ms // MIN}min 才同步一次 → 必须本地生产",
             ))
+            continue
+        if s.critical:
+            # 删除永远要传：晚一分钟都可能意味着"副本里还留着原文"
+            out.append(SyncPlan(s.name, s.tier, "push",
+                                "关键流：每轮都传，不看新鲜度"))
             continue
         if s.direction in ("both", "up") and pending_up.get(s.name):
             out.append(SyncPlan(s.name, s.tier, "push",

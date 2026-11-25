@@ -114,9 +114,40 @@ def _binned(events_ms: Sequence[int], bin_ms: int) -> tuple[np.ndarray, int]:
     return counts, t0
 
 
-def fit(events_ms: Sequence[int], *, periods: tuple[tuple[float, int], ...] = DEFAULT_PERIODS,
+def _exposure_ms(windows: Sequence[tuple[int, int]] | None, t0: int,
+                 nbins: int, bin_ms: int) -> np.ndarray | None:
+    """每个桶里**真正被观测到**的毫秒数。
+
+    断线那三天，她根本看不见——那段时间的 0 不是"他不在"，是"没数据"。
+    不分青红皂白地把空桶算成零，会把断线学成一个规律的低谷。
+    """
+    if windows is None:
+        return None
+    exp = np.zeros(nbins)
+    for a, b in windows:
+        lo = max(a, t0)
+        hi = min(b, t0 + nbins * bin_ms)
+        if hi <= lo:
+            continue
+        i0 = int((lo - t0) // bin_ms)
+        i1 = int((hi - t0 - 1) // bin_ms)
+        for i in range(i0, i1 + 1):
+            s = max(lo, t0 + i * bin_ms)
+            e = min(hi, t0 + (i + 1) * bin_ms)
+            exp[i] += max(0, e - s)
+    return exp
+
+
+def fit(events_ms: Sequence[int], *,
+        observed: Sequence[tuple[int, int]] | None = None,
+        periods: tuple[tuple[float, int], ...] = DEFAULT_PERIODS,
         weekend: bool = True, bin_ms: int = HOUR) -> PoissonHarmonic:
-    """泊松 GLM 拟合。**只能在 dream 里调用**（会 import statsmodels）。"""
+    """泊松 GLM 拟合。**只能在 dream 里调用**（会 import statsmodels）。
+
+    `observed` 是可观测窗口列表。给了它就用**曝光量**（offset）建模：
+    每个小时的"机会"时长不同，率要按机会归一化，而不是按桶数。
+    不给就退化成"首末事件之间全是观测"——**断线会被学成低谷**。
+    """
     try:
         import statsmodels.api as sm
     except ImportError as e:                       # pragma: no cover
@@ -129,11 +160,22 @@ def fit(events_ms: Sequence[int], *, periods: tuple[tuple[float, int], ...] = DE
     counts, t0 = _binned(events_ms, bin_ms)
     proto = PoissonHarmonic(beta=(), periods=periods, t0_ms=t0,
                             weekend=weekend, bin_ms=bin_ms)
-    X = np.asarray([proto.features(t0 + i * bin_ms) for i in range(len(counts))])
+    keep = np.ones(len(counts), dtype=bool)
+    offset = None
+    exp = _exposure_ms(observed, t0, len(counts), bin_ms)
+    if exp is not None:
+        keep = exp > 0                      # 完全没观测的桶直接不要
+        counts = counts[keep]
+        if len(counts) < 20:
+            raise ValueError("可观测的桶不足 20，别拟合——用 KDE 兜底")
+        offset = np.log(exp[keep] / bin_ms)  # 以"桶"为单位的机会
+    X = np.asarray([proto.features(t0 + i * bin_ms)
+                    for i in range(len(keep)) if keep[i]])
     # ★ scale="X2" = 拟泊松：用 Pearson X² 估计离散度并放大标准误。
     # 不做这一步，成簇数据会被当成独立事件，p 值假性极小
     # （实测：chaotic 序列 p=8.8e-6，加了拟泊松之后 0.016）。
-    res = sm.GLM(counts, X, family=sm.families.Poisson()).fit(scale="X2")
+    res = sm.GLM(counts, X, family=sm.families.Poisson(),
+                 offset=None if offset is None else offset).fit(scale="X2")
     return PoissonHarmonic(
         beta=tuple(float(b) for b in res.params), periods=periods,
         t0_ms=t0, weekend=weekend, bin_ms=bin_ms,

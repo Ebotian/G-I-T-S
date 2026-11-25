@@ -59,7 +59,10 @@ events(
 CREATE INDEX events_recv ON events(recv_ts);
 
 -- 删除的影子表（§15.8.1）：整库重建时靠它把已删的再删一遍
-redactions(event_id INTEGER PRIMARY KEY, ts INTEGER);
+-- ★ 删除流要有自己的单调序号。用被删事件的 id 当主键，删一条老事件时
+-- 游标早已越过它，增量查询永远看不到 —— 删除静默失效。
+redactions(id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER, ts INTEGER,
+           UNIQUE(event_id));
 
 -- 可观测性：她当时能不能看见（§14.4）
 observability(channel TEXT, ts_start INTEGER, ts_end INTEGER,
@@ -236,5 +239,6 @@ gits forget --actor <id>      整个实例的所有 self:* 记忆
 | 日期 | 改了什么 |
 |---|---|
 | 2026-11-25 | 初版 v0 |
+| 2026-11-25 | v5：`redactions` 改自带自增 id；删除同时清 `model_calls`（重放会从抽取响应里把正文读回来） |
 | 2026-11-25 | 加 §9 时间戳三个字段；副本同步游标 `sync_cursor`；`events_pending` |
 | 2026-11-25 | 审计后修：`ext_id` 改 NOT NULL（可空等于没有幂等）；新增 `observability`、`model_calls`；`nodes.scope`；`outbox.status` 增加 `unknown`；新增 §8 保留与删除 |

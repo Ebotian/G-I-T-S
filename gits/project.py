@@ -101,6 +101,8 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
     """恢复重放：清空投影，只用日志集重建。返回处理的事件条数。
 
     不调用任何模型。缺 model_calls 就抛 MissingModelResult。
+    **已删除的事件不参与重放**：它连同抽取响应一起被清过，再读一次就等于
+    把删掉的内容造回来。
     """
     calls = {
         r["event_id"]: r["response"]
@@ -117,12 +119,16 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
         args.append(until_event_id)
     sql += " ORDER BY id"
 
+    dead = {r["event_id"] for r in db.q("SELECT event_id FROM redactions")}
+
     n = 0
     # 整个重放是一个事务：崩在中途就保持旧投影，不留半成品。
     with Writer(db).txn() as c:
         for t in PROJECTION_TABLES:
             c.execute(f"DELETE FROM {t}")
         for row in db.conn.execute(sql, args).fetchall():
+            if row["id"] in dead:      # 删掉的不参与重放
+                continue
             response = calls.get(row["id"])
             if response is None:
                 raise MissingModelResult(
