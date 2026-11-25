@@ -8,6 +8,11 @@ EXTRA="${GITS_EXTRA:-dream}"
 
 command -v uv >/dev/null || pip3 install -q uv
 
+# 阿里云 → GitHub 的 HTTP/2 会间歇性 "Error in the HTTP2 framing layer"，
+# 表现是 git fetch 随机失败。钉到 HTTP/1.1 之后就稳定了。
+git config --global http.version HTTP/1.1
+git config --global http.postBuffer 524288000
+
 if [ -d "$HOME_DIR/.git" ]; then
   git -C "$HOME_DIR" fetch -q origin
   git -C "$HOME_DIR" reset -q --hard origin/main

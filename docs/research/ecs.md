@@ -32,7 +32,7 @@
 | `python -m synth.eval_search`（3 种子） | 3.9 s | 37.0 MB |
 | `python -m synth.eval_decay`（5 种子） | 13.4 s | 36.5 MB |
 | **`gits-ghost` 常驻** | — | **11.5–11.8 MB** |
-| **`gits-shell` 常驻** | — | **12.0 MB** |
+| **`gits-shell` 常驻** | — | **11.3–12.0 MB** |
 
 两条结论：
 
@@ -103,6 +103,24 @@ events=1 条 vital
 
 反过来，systemd 单元里如果写的是尚不存在的 `gits ghost`，那 installed 状态就是假的：
 `systemctl status` 会说 failed，而你会以为是配置问题。
+
+## 4.1 一个会随机咬人的坑：HTTP/2
+
+从阿里云拉 GitHub，`git fetch` 会间歇性失败：
+
+```
+error: RPC failed; curl 16 Error in the HTTP2 framing layer
+fatal: expected flush after ref listing
+```
+
+它不总是失败——第一次部署就是好的，第二次就挂了，而你会以为是代码问题。
+修法很土但有效：
+
+```bash
+git config --global http.version HTTP/1.1
+```
+
+已经写进 `deploy/install.sh`，只在 ECS 上生效，不影响本机。
 
 ## 5. 部署与回滚
 
