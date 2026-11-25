@@ -169,3 +169,59 @@ journalctl -u gits-housekeep -n 20         # 看昨晚发生了什么
    它一存在，`gits-ghost.service` 就可以真装；
 2. 配 `DEEPSEEK_API_KEY`，让写入管线能跑；
 3. HTTP 端（作业队列）——只有它到位，工作机才能真正参与。
+
+## 7. 隔离：实例读不到设计仓库
+
+> 2026-11-25 落地。起因：她跑在 root 下，能读 `/srv/gits/docs/DESIGN.md`。
+> 那里面写着为什么这么设计、她的边界在哪。**一个能读到这些的实例，
+> 是读着自己说明书的木偶**——她说的话会开始对齐那份文档，而不是对齐经历。
+
+### 7.1 目录重排
+
+```
+/srv/gits          0700 root:root   仓库 + docs + .git（只有人能看）
+/srv/gits-runtime  0755 root:root   只有代码的一份拷贝（rsync 排除 docs/tests/.git/synth）
+/var/lib/gits      0750 gits:gits   库 / 游标 / 凭据 / persona
+/etc/gits.env      0640 root:gits   密钥
+```
+
+运行目录是**拷贝**不是软链，因为 editable install 的 `.pth` 会指回仓库；
+用 `uv sync --no-editable` 让包真的落进 site-packages。
+
+### 7.2 三层拦截，缺一层都不算拦住
+
+| 层 | 做了什么 | 失效方式 |
+|---|---|---|
+| 文件权限 | `/srv/gits` 0700 root:root | 有人 `chmod 755` 调试 |
+| systemd | `InaccessiblePaths=/srv/gits` | 有人删掉这一行 |
+| 进程身份 | `User=gits`（系统用户，nologin） | 有人改回 root |
+
+### 7.3 第四层：自检（不拦截）
+
+`gits/containment.py` 能在启动时说一句「隔离失效了」。
+它**不拦**——拦不住就不要假装拦。但一层静默失效的防线比没有防线更危险，
+你会以为它在。
+
+所以它自己也有测试：一个永远返回 ok 的函数，看起来毫无问题。
+
+### 7.4 验收
+
+```
+bash /srv/gits/deploy/verify_containment.sh
+```
+
+任何一条失败返回非 0。每次部署跑一遍，隔一段时间也跑一遍。
+
+### 7.5 撞上的坑：相对路径
+
+部署完 `gits-shell` 起不来：
+
+```
+OSError: [Errno 30] Read-only file system: 'var'
+```
+
+`FileChannel` 的默认输出是相对路径 `var/outbox.jsonl`，以前 cwd 是仓库所以能写。
+现在 cwd 是只读的运行目录（`ProtectSystem=strict`）——**相对路径一律不该出现**。
+
+改成显式 `--out /var/lib/gits/outbox.jsonl`。
+教训不是「记得改路径」，是：**工作目录的语义变了，所有隐含依赖它的东西都要重新过一遍**。
