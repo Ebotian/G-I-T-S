@@ -63,3 +63,4 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/VERIFIED.md`](docs/VERIFIED.md) — 外部依赖事实与验证记录（带出处与日期）
 - [`docs/research/sna.md`](docs/research/sna.md) — N=2..5 时仍成立的 SNA 方法
 - [`docs/research/rhythm.md`](docs/research/rhythm.md) — 节律：作息是学出来的分布，不是配置的时段
+- [`docs/research/stats-libs.md`](docs/research/stats-libs.md) — 统计库用哪个、不用哪个、**在哪一层用**（ECS 实测 import 耗时与 RSS）
