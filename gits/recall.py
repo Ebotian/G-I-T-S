@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from gits.db import DB
 from gits.fsrs import DAY, retrievability
+from gits.scope import visible
 from gits.search import index_node, search
 
 
@@ -78,8 +79,8 @@ def _has_fts(db: DB) -> bool:
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_fts'"))
 
 
-def recall(db: DB, query: str, *, context: str = "", now_ms: int,
-           k: int = 10) -> list[Recalled]:
+def recall(db: DB, query: str, *, actor: str, context: str = "",
+           now_ms: int, k: int = 10) -> list[Recalled]:
     """她此刻能想起的 k 条。"""
     def r_of(nid: str) -> float:
         row = db.one("SELECT s, last_touch FROM nodes WHERE id=?", (nid,))
@@ -90,7 +91,8 @@ def recall(db: DB, query: str, *, context: str = "", now_ms: int,
         elapsed_days = max(0.0, (now_ms - row["last_touch"]) / DAY)
         return retrievability(elapsed_days, float(row["s"]))
 
-    hits = search(db.conn, query, k=k * 3, context=context, r_of=r_of)
+    hits = search(db.conn, query, k=k * 3, context=context, r_of=r_of,
+                  scopes=visible(actor))
     out: list[Recalled] = []
     for h in hits:
         row = latest_content(db, h.node_id)

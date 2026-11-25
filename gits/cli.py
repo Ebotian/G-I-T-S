@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -107,6 +108,11 @@ def cmd_quota(args: argparse.Namespace) -> int:
     return 0
 
 
+def _flag(name: str) -> bool:
+    """环境变量开关。1/true/yes 都算开——部署时手打，宽容一点。"""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def cmd_ghost(args: argparse.Namespace) -> int:
     """常驻内核：心跳 + 快照。投递在 shell 里，不在这里。"""
     import asyncio as _asyncio
@@ -118,7 +124,9 @@ def cmd_ghost(args: argparse.Namespace) -> int:
     with _open(args):
         pass                                  # 只为建库/迁移，随后 serve 自己开
     return _asyncio.run(serve(args.db, node=args.node,
-                              persona_path=args.persona, once=args.once))
+                              persona_path=args.persona, once=args.once,
+                              persona_apply=(args.persona_apply
+                                              or _flag("GITS_PERSONA_APPLY"))))
 
 
 def cmd_shell(args: argparse.Namespace) -> int:
@@ -250,7 +258,7 @@ def cmd_recall(args: argparse.Namespace) -> int:
     """她此刻能想起什么。走真实的 nodes / node_content / FTS / r。"""
     from .recall import recall
     with _open(args) as db:
-        rows = recall(db, args.query, context=args.context or "",
+        rows = recall(db, args.query, actor="her", context=args.context or "",
                       now_ms=args.now or now_ms(), k=args.k)
         if not rows:
             print("（什么都没想起来）")
@@ -266,7 +274,7 @@ def cmd_turn(args: argparse.Namespace) -> int:
     from .recall import lines, recall
     with _open(args) as db:
         t = args.now or now_ms()
-        rows = recall(db, args.text, context=args.context or "", now_ms=t, k=args.k)
+        rows = recall(db, args.text, actor="her", context=args.context or "", now_ms=t, k=args.k)
         prompt = assemble(
             PersonaSeed(narrative=args.narrative, version=1),
             RelationSnapshot(bucket=bucket(t), summary="（B 段先留空）",
@@ -371,7 +379,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     gh = sub.add_parser("ghost", help="常驻内核（心跳/投递/快照）")
     gh.add_argument("--node", default="cloud")
-    gh.add_argument("--persona", default=None, help="A 段人格文件（一天换一次）")
+    gh.add_argument("--persona", default=None,
+                    help="A 段人格种子文件（最初的版本，之后由 persona 事件接管）")
+    gh.add_argument("--persona-apply", action="store_true",
+                    help="真的写人格新版本。默认只判定不动作（观察期）")
     gh.add_argument("--outbox-file", default=None, help="投递到文件（没有真通道时）")
     gh.add_argument("--once", action="store_true", help="只跑一拍就退出（测试用）")
     gh.set_defaults(fn=cmd_ghost)

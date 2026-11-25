@@ -110,6 +110,11 @@ class Ghost:
     compact_ms_est: int = 20_000
     _compact_future: object | None = None
     _pool: object | None = None
+    #: 人格更新。**默认只判定、不动作**（GITS_PERSONA_APPLY=1 才真写）——
+    #: 这种行为一旦判错，第二天才发现，而那时候已经不可逆了。
+    persona_apply: bool = False
+    persona_text: str = ""
+    _last_night: int = 0
     _last_beat: int = 0
     _last_snapshot: int = 0
     stopped: bool = False
@@ -189,7 +194,35 @@ class Ghost:
             got = self.window(t)
             if got:
                 did["ctx"] = got
+        if t - self._last_night >= self.ctx_ms:
+            got = self.night(t)
+            if got:
+                did["night"] = got
         return did
+
+    def night(self, t: int | None = None) -> str:
+        """夜里该不该动人格。先判定、记账；确认过得去了才真的改。"""
+        from gits import night as N
+        from gits import persona
+
+        t = now_ms() if t is None else t
+        self._last_night = t
+        chk = N.check(self.db, t)
+        if not chk.ok:
+            return ""
+        if not N.enough_time(chk, self.compact_ms_est * 2):
+            return ""                       # 安静，但不够干完
+        if not self.persona_apply:
+            return f"（只判定）{chk.why}"
+        try:
+            got = persona.update(self.db, now=t, fallback=self.persona_text)
+        except Exception as exc:
+            self.last_error = f"persona: {type(exc).__name__}: {exc}"
+            return "persona 失败"
+        if got is None:
+            return f"{chk.why}；但今天没有新经历，不更新"
+        return (f"{'保持' if got.keep else f'改 {got.changes} 处'}"
+                f" → v{persona.latest(self.db).version}")
 
     def window(self, t: int | None = None) -> str:
         """该不该换窗。**整理是后台活，先在闲得够久的时候做。**"""
@@ -248,10 +281,15 @@ class Ghost:
 
 
 async def serve(db_path: str | Path, *, node: str = "cloud",
-                persona_path: str | None = None, once: bool = False) -> int:
+                persona_path: str | None = None, once: bool = False,
+                persona_apply: bool = False) -> int:
     """常驻循环。SIGTERM 时**把手上这一拍做完再退**。"""
     db = DB(db_path)
-    ghost = Ghost(db=db, node=node, persona_path=persona_path)
+    text = ""
+    if persona_path and Path(persona_path).exists():
+        text = Path(persona_path).read_text(encoding="utf-8").strip()
+    ghost = Ghost(db=db, node=node, persona_path=persona_path,
+                  persona_text=text, persona_apply=persona_apply)
 
     def _stop(*_: object) -> None:
         ghost.stopped = True

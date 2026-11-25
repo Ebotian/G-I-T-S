@@ -28,7 +28,7 @@ def compare(fs: Facts, *, n_samples: int = 12) -> dict:
         tmp = Path(mkdtemp()) / "mem.db"
         db = load(fs, tmp, upto_ms=q.ts)
         try:
-            prod = recall(db, q.text, context=q.context, now_ms=q.ts, k=5)
+            prod = recall(db, q.text, actor="her", context=q.context, now_ms=q.ts, k=5)
             conn = build_index(fs, upto_ms=q.ts)
             toy = raw_search(conn, q.text, k=5, context=q.context)
         finally:

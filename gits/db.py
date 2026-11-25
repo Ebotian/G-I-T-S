@@ -114,6 +114,7 @@ class Writer:
         recv_ts: int | None = None,
         node_id: str | None = None,
         payload: bytes | None = None,
+        scope: str = "world",
     ) -> tuple[int, bool]:
         """追加一条事件。返回 (id, created)。
 
@@ -130,9 +131,10 @@ class Writer:
         with self.txn() as c:
             cur = c.execute(
                 "INSERT INTO events(ts, recv_ts, source, kind, ext_id, node_id,"
-                " payload, lag, ts_trust) VALUES(?,?,?,?,?,?,?,?,?)"
+                " payload, lag, ts_trust, scope) VALUES(?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(source, ext_id) DO NOTHING",
-                (ts, recv_ts, source, kind, ext_id, node_id, payload, lag, ts_trust),
+                (ts, recv_ts, source, kind, ext_id, node_id, payload, lag, ts_trust,
+                 scope),
             )
             if cur.rowcount:
                 return int(cur.lastrowid), True

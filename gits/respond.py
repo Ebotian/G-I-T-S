@@ -20,6 +20,7 @@ from gits.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
 from gits.db import DB, Writer, now_ms
 from gits.llm import Reply, chat, cost_cny
 from gits.recall import lines, recall
+from gits.scope import visible
 
 DEFAULT_PERSONA = "我不太会哄人。但我记得住你说过的东西。"
 
@@ -44,7 +45,8 @@ def load_persona(path: str | Path | None) -> PersonaSeed:
     return PersonaSeed(narrative=DEFAULT_PERSONA, version=0)
 
 
-def recent(db: DB, *, from_id: int | None = None, until_id: int | None = None,
+def recent(db: DB, *, actor: str = "her", from_id: int | None = None,
+           until_id: int | None = None,
            limit: int = 200) -> tuple[tuple[str, str], ...]:
     """**这一扇窗里的全部对话**，不是"最近 6 句"。
 
@@ -52,11 +54,13 @@ def recent(db: DB, *, from_id: int | None = None, until_id: int | None = None,
     60%/80% 两个阈值一辈子都触发不了，窗口也就永远换不掉。
     窗口的边界由 from_id/until_id 定，长度由预算管。
     """
+    vis = visible(actor)
     rows = db.q(
         "SELECT kind, payload FROM events"
         " WHERE kind IN ('msg_in','msg_out')"
+        " AND scope IN (%s)" % ",".join("?" * len(vis)) +
         " AND id >= COALESCE(?, 0) AND id <= COALESCE(?, 1<<62)"
-        " ORDER BY id DESC LIMIT ?", (from_id, until_id, limit))
+        " ORDER BY id DESC LIMIT ?", (*vis, from_id, until_id, limit))
     out = []
     for r in reversed(rows):
         who = "他" if r["kind"] == "msg_in" else "我"
@@ -92,18 +96,19 @@ def pending(db: DB, *, limit: int = 3) -> list[dict]:
 
 def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
             model: str = "deepseek-flash", max_tokens: int = 200,
-            now: int | None = None) -> Turn:
+            actor: str = "her", now: int | None = None) -> Turn:
     """装配 → 调模型 → 落 outbox。**先落库再投递**（§delivery）。"""
     now = now or now_ms()
     text = (event["payload"] or b"").decode("utf-8", "replace")
 
     # C 段：这一轮才有的东西。**检索在这里发生**——上下文扩展 + r。
     win = ctxwin.current(db)
-    history = recent(db, from_id=win["first_event_id"] if win else None,
+    history = recent(db, actor=actor,
+                     from_id=win["first_event_id"] if win else None,
                      until_id=event["id"])
     seed = persona or load_persona(None)
     snap = relation(db, now=now)
-    hits = recall(db, text, context=" ".join(t for _w, t in history),
+    hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits))
     prompt = assemble(seed, snap, ctx)

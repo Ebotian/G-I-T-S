@@ -115,6 +115,7 @@ def search(conn: sqlite3.Connection, query: str, *, k: int = 10,
            vec_of: Callable[[str], float] | None = None,
            candidates_of: Callable[[str], Iterable[tuple[str, float]]] | None = None,
            context: str = "",
+           scopes: Sequence[str] | None = None,
            w: Weights = Weights()) -> list[Hit]:
     """检索。词面是主路，向量是**另一条召回通道**（不是重排钩子）。
 
@@ -129,10 +130,17 @@ def search(conn: sqlite3.Connection, query: str, *, k: int = 10,
     if not tokens.strip():
         return []
 
+    # ★ 可见域在这里挡一次。不传 scopes 就是"全部可见"，
+    # 但生产路径（recall）永远会传——它没有默认值。
+    clause, args = "", []
+    if scopes:
+        clause = (" AND node_id IN (SELECT id FROM nodes WHERE scope IN (%s))"
+                  % ",".join("?" * len(scopes)))
+        args = list(scopes)
     rows = conn.execute(
         "SELECT node_id, bm25(node_fts) AS rank FROM node_fts"
-        " WHERE node_fts MATCH ? ORDER BY rank LIMIT ?",
-        (" OR ".join(tokens.split()), max(k * 5, 20)),
+        " WHERE node_fts MATCH ?" + clause + " ORDER BY rank LIMIT ?",
+        [" OR ".join(tokens.split()), *args, max(k * 5, 20)],
     ).fetchall()
 
     merged: dict[str, tuple[float, list[str]]] = {}

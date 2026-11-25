@@ -28,7 +28,7 @@ def _db(tmp_path: Path):
 def test_裸问想不起来(tmp_path: Path) -> None:
     db, q = _db(tmp_path)
     try:
-        assert recall(db, "那个老是出问题的家伙", now_ms=q.ts) == []
+        assert recall(db, "那个老是出问题的家伙", actor="her", now_ms=q.ts) == []
     finally:
         db.close()
 
@@ -36,7 +36,7 @@ def test_裸问想不起来(tmp_path: Path) -> None:
 def test_有上下文就想得起来(tmp_path: Path) -> None:
     db, q = _db(tmp_path)
     try:
-        rows = recall(db, q.text, context=q.context, now_ms=q.ts, k=5)
+        rows = recall(db, q.text, actor="her", context=q.context, now_ms=q.ts, k=5)
         assert rows, "补上上下文之后必须能想起来"
         assert rows[0].r > 0
         assert rows[0].text
@@ -48,7 +48,7 @@ def test_她的那一行不带列表符号(tmp_path: Path) -> None:
     """`render_c` 会加 `- `；两处都加就成了 `- - 1 小时前`。"""
     db, q = _db(tmp_path)
     try:
-        rows = recall(db, q.text, context=q.context, now_ms=q.ts, k=1)
+        rows = recall(db, q.text, actor="her", context=q.context, now_ms=q.ts, k=1)
         assert not rows[0].line().startswith("-")
         assert "：" in rows[0].line()
     finally:
@@ -62,7 +62,7 @@ def test_被取代的版本不会被想起(tmp_path: Path) -> None:
                                 " WHERE superseded_by IS NOT NULL")]
         assert dead, "这份数据里应该有被取代的版本"
         nid = dead[0]["node_id"]
-        rows = recall(db, "想换掉", context="物", now_ms=FS.end, k=50)
+        rows = recall(db, "想换掉", actor="her", context="物", now_ms=FS.end, k=50)
         assert all(r.node_id != nid for r in rows) or all(
             r.r == 0 for r in rows if r.node_id == nid)
     finally:
@@ -83,7 +83,7 @@ def test_重放索引是幂等的(tmp_path: Path) -> None:
 def test_想起来的进的是_C_段(tmp_path: Path) -> None:
     db, q = _db(tmp_path)
     try:
-        rows = recall(db, q.text, context=q.context, now_ms=q.ts, k=3)
+        rows = recall(db, q.text, actor="her", context=q.context, now_ms=q.ts, k=3)
         seed = PersonaSeed(narrative="我记得住你说过的话。", version=1)
         snap = RelationSnapshot(bucket=0, summary="认识 47 天", hubs=(), phase="醒着")
         bare = assemble(seed, snap, TurnContext(stimulus=q.text))
