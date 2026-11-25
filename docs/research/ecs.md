@@ -1,0 +1,80 @@
+# ECS 上到底有什么（2026-11-25 实测）
+
+## 0. 一句话
+
+> **部署管道通了，运行时还没写。**
+>
+> `gits` 现在全是**一次性命令**（say / replay / recall / turn / sync / verify），
+> 没有一个常驻循环。所以 systemd 里只装了「夜间家务」这一个真能跑的单元，
+> 没有假装 `gits-ghost` 已经存在。
+
+## 1. 已经装好的
+
+| 项 | 状态 |
+|---|---|
+| uv | 0.13.10（`pip3 install uv`） |
+| 代码 | `/srv/gits`，跟 `origin/main` 同步 |
+| 虚拟环境 | `/srv/gits/.venv`，numpy 2.2.6 + statsmodels 0.15.0，**281 MB** |
+| 数据目录 | `/srv/gits/var` |
+| 夜间家务 | `gits-housekeep.timer`，每晚 03:17（±10 分钟随机）|
+| 依赖镜像 | `UV_INDEX_URL` 指向阿里云（uv 不读 pip.conf）|
+
+## 2. 实测数字（都是这台 2C/1.6G 上量的）
+
+| 命令 | 耗时 | 峰值 RSS |
+|---|---|---|
+| `gits status` | **0.29 s** | **18.9 MB** |
+| `gits say` | 0.13 s | 18.9 MB |
+| `gits replay --restore` | 0.13 s | 18.7 MB |
+| `import numpy` | 0.21 s | 25.3 MB |
+| `import statsmodels.api` | **7.72 s** | **162.7 MB** |
+| `python -m synth.eval_search`（3 种子） | 3.9 s | 37.0 MB |
+| `python -m synth.eval_decay`（5 种子） | 13.4 s | 36.5 MB |
+
+两条结论：
+
+1. **ghost 的 90 MB 预算站得住**：CLI 实测 18.9 MB。剩下的余量足够放一个
+   常驻循环和几个连接池。
+2. **statsmodels 必须隔离在 dream**：7.72 秒、162 MB，是 numpy 的 8 倍耗时、
+   6 倍内存。它一进 ghost 的 import 路径，"启动 200 ms 内"就变成了笑话。
+   （注意 `eval_decay` 峰值只有 36 MB——因为它只 import 了 `gits.decay`，
+   而 statsmodels 在 `gits/presence` 里，那块没被加载。）
+
+## 3. 还没做的（要叫它"服务"还差这些）
+
+| # | 缺口 | 影响 |
+|---|---|---|
+| 1 | **没有守护进程** | `ghost` / `shell` / `dream` 都是设计里的名字，没有常驻循环、没有心跳、没有 outbox 投递 |
+| 2 | **没有 HTTP 端** | 拉取式作业队列（§15.4）和跨机同步的传输层都没写，同步只能在同机两个文件之间做 |
+| 3 | **没有 API key** | `DEEPSEEK_API_KEY` 还没配，抽取/生成一次都没跑过 |
+| 4 | **没有 config.toml** | 所有参数还在代码默认值里；§14.6 那条"承诺线"还没有地方声明 |
+| 5 | **没有真实数据** | `var/gits.db` 是空的；夜间家务跑出来是 `replayed 0 events` |
+| 6 | **没有备份/轮转** | 保留策略写在 schema §8，一行都没实现 |
+
+第 1 条是关键：**没有它，前面所有验证都停留在"库"和"命令"层面**，
+没有一个是"跑着的服务"。
+
+## 4. 为什么先装 timer 而不是先写守护进程
+
+因为 `gits replay --restore` **现在就是有用的**：它是一次免费的重放回归测试。
+每晚跑一次，重建失败就说明不变量坏了——而这条不变量是整套架构的地基。
+
+反过来，systemd 单元里如果写的是尚不存在的 `gits ghost`，那 installed 状态就是假的：
+`systemctl status` 会说 failed，而你会以为是配置问题。
+
+## 5. 部署与回滚
+
+```bash
+sudo bash /srv/gits/deploy/install.sh      # 幂等，可以反复跑
+systemctl list-timers gits-housekeep       # 看下次什么时候跑
+journalctl -u gits-housekeep -n 20         # 看昨晚发生了什么
+```
+
+回滚就是 `git -C /srv/gits reset --hard <commit>` 再跑一次 install.sh。
+
+## 6. 下一步（按依赖顺序）
+
+1. 写 `gits ghost` 的常驻循环（先只做：心跳 + 定时 replay + outbox 扫描），
+   它一存在，`gits-ghost.service` 就可以真装；
+2. 配 `DEEPSEEK_API_KEY`，让写入管线能跑；
+3. HTTP 端（作业队列）——只有它到位，工作机才能真正参与。
