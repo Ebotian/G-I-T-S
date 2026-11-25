@@ -87,6 +87,9 @@ node_content(id INTEGER PRIMARY KEY, node_id TEXT, content TEXT,
 -- 横向召回（豆辞典，§12.2-3）
 aliases(node_id TEXT, keyword TEXT, PRIMARY KEY(node_id, keyword));
 
+-- 她的行动手艺（§18.2）：写过的脚本可以调回来
+-- 用 kind='procedure' 存在 nodes/node_content 里，内容就是脚本源码
+
 -- 赫布边
 edges(src TEXT, dst TEXT, w REAL, kind TEXT, t_created INTEGER, last_coact INTEGER,
       PRIMARY KEY(src, dst, kind));
@@ -130,7 +133,8 @@ state_snapshot(ts INTEGER PRIMARY KEY, phase TEXT, s_user REAL, s_node REAL,
 ```sql
 -- 拉取式作业队列（§15.4）
 jobs(id TEXT PRIMARY KEY, kind TEXT, payload BLOB, created_ts INTEGER,
-     lease_until INTEGER, attempts INTEGER, cursor TEXT, status TEXT);
+     lease_until INTEGER, attempts INTEGER, cursor TEXT, status TEXT,
+     source TEXT);   -- 'dream' | 'self'（§18：她自己发起的活儿）
 -- status: queued | leased | done | failed
 
 -- 积压（§15.7）：她的思绪有长度
@@ -138,6 +142,10 @@ backlog(kind TEXT PRIMARY KEY, n INTEGER, oldest_ts INTEGER);
 
 -- 节点心跳
 nodes_health(node_id TEXT PRIMARY KEY, last_seen INTEGER, caps TEXT, idle_since INTEGER);
+
+-- 配给制（§18.4）：她是知情的，余额是她的状态而不是你的开关
+quota(day TEXT, kind TEXT, used INTEGER, limit INTEGER, PRIMARY KEY(day, kind));
+-- kind: llm_in | llm_out | fetch | search | ocr | tts_chars | asr_sec | exec_sec
 ```
 
 ---
