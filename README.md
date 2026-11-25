@@ -67,5 +67,6 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/stats-libs.md`](docs/research/stats-libs.md) — 统计库用哪个、不用哪个、**在哪一层用**（ECS 实测 import 耗时与 RSS）
 - [`docs/research/multi-node.md`](docs/research/multi-node.md) — 多端调度：频率 × 硬件 × 同步节律；依赖预算与 per-node 安装
 - [`docs/research/sync.md`](docs/research/sync.md) — 分层同步：人格秒级、真相按计算需求、投影不传、大产物只传身份
+- [`docs/research/memory-data.md`](docs/research/memory-data.md) — 记忆的实验数据与一个否定结论：合成数据能测实现、不能测理论
 - [`docs/research/replica.md`](docs/research/replica.md) — 可恢复的单向副本：游标语义、verify 在比什么、刻意没做的三件事
 - [`docs/research/autonomy.md`](docs/research/autonomy.md) — 她不在你面前时用什么额度做什么：三等分、日清、形式自由、内容不可见
