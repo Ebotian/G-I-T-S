@@ -26,11 +26,16 @@ from gits.project import MissingModelResult, dump_projection, node_id_for, resto
 REPO = Path(__file__).resolve().parents[1]
 
 
+#: 固定基准时刻。合成数据必须可复现——用 now_ms() 会让"两次运行逐字节相同"
+#: 这类测试变成看运气。
+T0 = 1_800_000_000_000
+
+
 def _seed(db: DB, n: int = 5) -> list[int]:
     w = Writer(db)
     ids = []
     for i in range(n):
-        ts = now_ms() + i * 1000
+        ts = T0 + i * 1000
         ev_id, created = w.append_event(
             source="wechat", kind="msg_in", ext_id=f"m{i}",
             ts=ts, recv_ts=ts, payload=f"第{i}条".encode(),

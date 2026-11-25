@@ -45,13 +45,20 @@ class DB:
 
     # ── 迁移 ───────────────────────────────────────────────
     def _migrate(self) -> None:
-        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if version >= 1:
-            return
-        sql = (SCHEMA_DIR / "001_init.sql").read_text(encoding="utf-8")
-        self.conn.executescript(
-            "BEGIN IMMEDIATE;\n" + sql + "\nPRAGMA user_version=1;\nCOMMIT;"
-        )
+        """按文件名编号顺序应用，`user_version` 记已应用到哪。
+
+        派生表永远可以整库重建（schema §6），所以迁移写坏了有退路。
+        """
+        version = int(self.conn.execute("PRAGMA user_version").fetchone()[0])
+        for path in sorted(SCHEMA_DIR.glob("[0-9]*_*.sql")):
+            n = int(path.name.split("_", 1)[0])
+            if n <= version:
+                continue
+            sql = path.read_text(encoding="utf-8")
+            self.conn.executescript(
+                f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version={n};\nCOMMIT;"
+            )
+            version = n
 
     # ── 便捷读 ─────────────────────────────────────────────
     def q(self, sql: str, args: Sequence[Any] = ()) -> list[sqlite3.Row]:

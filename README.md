@@ -28,8 +28,16 @@ python -m gits.cli --db /tmp/g.db trace 1
 | 3 | **空库离线重放 → 相同投影** —— 且缺模型结果时**硬失败**，不偷偷重算 |
 | 4 | **一条回复可追到叙事版本与输入** —— `influence` + `model_calls` |
 
+基建层（M1/M2，全部在合成数据上验证，不联网不调模型）：
+
+| 模块 | 保证 |
+|---|---|
+| `context.py` | **A 段签名里没有时间** —— 缓存命中的守门人；测试扫描 A 段里不许出现时刻 |
+| `rhythm.py` | 先问"有没有节律"（Lomb-Scargle，不均匀采样），再谈周期核密度；断线时 `s_user` 返回 `None` 而不是 0 |
+| `gate.py` | `开口价值 = 未解释 × 可解释 × (1-积压) × 温度 × 0.85^n`，每个决策必带 `reason` |
+
 ```bash
-uv run --python 3.10 --with pytest python -m pytest tests -q     # 9 passed
+uv run --python 3.10 --with pytest --with numpy python -m pytest tests -q   # 38 passed
 ```
 
 ## 文档
