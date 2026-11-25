@@ -258,9 +258,10 @@ def compact(db: DB, entity: str, *, now: int | None = None,
         for child in press:
             c.execute("UPDATE node_content SET absorbed_into=? WHERE node_id=?"
                       " AND absorbed_into IS NULL", (nid, child))
-            c.execute("INSERT OR IGNORE INTO edges(src, dst, w, kind, t_created,"
-                      " last_coact) VALUES(?,?,?,?,?,?)",
-                      (nid, entity_id(entity), 1.0, "mentions", now, now))
+            from gits.graph import add_edge
+
+            add_edge(c, src=nid, dst=entity_id(entity), kind="mentions",
+                     ts=now, w=1.0)
 
     return Compacted(entity=entity, node_id=nid, depth=depth,
                      children=len(press), summary=summary,

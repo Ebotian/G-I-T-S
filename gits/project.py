@@ -129,11 +129,11 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
             (nid_, name, ts, nid_, name))
 
     def link(a: str, b: str, w: float, edge_kind: str) -> None:
-        conn.execute(
-            "INSERT INTO edges(src, dst, w, kind, t_created, last_coact)"
-            " VALUES(?,?,?,?,?,?) ON CONFLICT(src, dst, kind) DO UPDATE SET"
-            "   w = w + excluded.w, last_coact = excluded.last_coact",
-            (a, b, w, edge_kind, ts, ts))
+        # 带遗忘的计数：旧值先按时间衰减，再加这次（见 graph.py）。
+        # 纯 w = w + 1 会让「三年前」和「昨天」一样重。
+        from gits.graph import add_edge
+
+        add_edge(conn, src=a, dst=b, kind=edge_kind, ts=ts, w=w)
 
     for e in payload.get("entities") or []:
         name = str(e.get("name", "")).strip() if isinstance(e, dict) else str(e).strip()

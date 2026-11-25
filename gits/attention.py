@@ -157,20 +157,30 @@ MAX_TOPICS = 32
 ANCHOR_EPS = 0.01         # 挪动小于这个就不记事件
 
 
-def _mentions(db: DB, *, now: int, window_days: int = WINDOW_DAYS) -> dict[str, int]:
-    """最近窗口里，每个实体被提到的次数。用 mentions 边，不碰向量。"""
+def _mentions(db: DB, *, now: int,
+              window_days: int = WINDOW_DAYS) -> dict[str, float]:
+    """最近窗口里，每个实体被提到了**多少分量**（不是多少条）。
+
+    早先是 count(*) 数行数，完全不管 edges.w：10 次深谈和 10 次顺嘴一提
+    权重一样。现在按带遗忘的强度求和（graph.py）。
+    """
+    from gits.graph import effective
+
     since = now - window_days * 86_400_000
     rows = db.q(
-        "SELECT c.content AS name, count(*) AS n FROM edges e"
+        "SELECT c.content AS name, e.w, e.last_coact FROM edges e"
         " JOIN nodes d ON d.id = e.dst AND d.kind = 'entity'"
         " JOIN node_content c ON c.id ="
         "   (SELECT max(id) FROM node_content WHERE node_id = d.id)"
-        " WHERE e.kind = 'mentions' AND e.t_created > ?"
-        " GROUP BY c.content", (since,))
-    return {str(r["name"]): int(r["n"]) for r in rows}
+        " WHERE e.kind = 'mentions' AND e.t_created > ?", (since,))
+    out: dict[str, float] = {}
+    for r in rows:
+        v = effective(float(r["w"]), r["last_coact"], now)
+        out[str(r["name"])] = out.get(str(r["name"]), 0.0) + v
+    return out
 
 
-def _target(n: int, avg: float) -> float:
+def _target(n: float, avg: float) -> float:
     """提到次数 -> 目标锚点。没提到就是中性 1.0。"""
     if n <= 0:
         return NEUTRAL
