@@ -153,6 +153,70 @@ def cmd_inbox(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_weixin(args: argparse.Namespace) -> int:
+    """微信通道：登录、查看、发一条。"""
+    from .channels.weixin import Account, WeixinClient, WeixinChannel
+
+    state = Path(args.state)
+    client = WeixinClient()
+
+    if args.action == "login":
+        d = client.get_qrcode()
+        if d.get("ret") not in (0, None):
+            print("取二维码失败:", d, file=sys.stderr)
+            return 1
+        qr, url = d["qrcode"], d.get("qrcode_img_content", "")
+        print(json.dumps({"qrcode": qr, "url": url}, ensure_ascii=False), flush=True)
+        print("请用手机微信扫码：", url, flush=True)
+
+        deadline = time.time() + args.wait
+        while time.time() < deadline:
+            st = client.poll_qr(qr)
+            s = st.get("status")
+            if s in ("scaned", "wait"):
+                continue
+            if s == "confirmed":
+                acct = Account(token=st.get("bot_token", ""),
+                               base_url=st.get("baseurl") or "https://ilinkai.weixin.qq.com",
+                               ilink_bot_id=st.get("ilink_bot_id", ""),
+                               user_id=st.get("ilink_user_id", ""))
+                acct.save(state)
+                print("登录成功:", json.dumps(
+                    {"ilink_bot_id": acct.ilink_bot_id, "user_id": acct.user_id,
+                     "base_url": acct.base_url}, ensure_ascii=False))
+                return 0
+            if s in ("expired", "need_verifycode", "verify_code_blocked"):
+                print("扫码失败/过期:", s)
+                return 2
+        print("等待超时")
+        return 3
+
+    if not state.exists():
+        print("还没登录：先跑 gits weixin login", file=sys.stderr)
+        return 1
+    account = Account.load(state)
+
+    if args.action == "whoami":
+        c = WeixinClient(account)
+        print(json.dumps({"account": account.user_id, "bot": account.ilink_bot_id,
+                          "base": account.base_url}, ensure_ascii=False))
+        try:
+            cfg = c.get_config()
+            print("typing_ticket:", "有" if cfg.get("typing_ticket") else "无")
+        except Exception as exc:
+            print("getconfig 失败:", type(exc).__name__, file=sys.stderr)
+        return 0
+
+    if args.action == "send":
+        if not args.to:
+            print("需要 --to", file=sys.stderr)
+            return 1
+        resp = WeixinClient(account).send_text(args.to, args.text,
+                                               args.context_token)
+        print(json.dumps(resp, ensure_ascii=False))
+        return 0
+    return 1
+
 def cmd_recall(args: argparse.Namespace) -> int:
     """她此刻能想起什么。走真实的 nodes / node_content / FTS / r。"""
     from .recall import recall
@@ -299,6 +363,15 @@ def build_parser() -> argparse.ArgumentParser:
     ib.add_argument("--file", default="var/inbox.jsonl")
     ib.add_argument("--ext-id", default=None)
     ib.set_defaults(fn=cmd_inbox)
+
+    wx = sub.add_parser("weixin", help="微信通道：登录 / 查看 / 发送")
+    wx.add_argument("action", choices=["login", "whoami", "send"])
+    wx.add_argument("--state", default="var/weixin.json")
+    wx.add_argument("--wait", type=float, default=180.0)
+    wx.add_argument("--to", default=None)
+    wx.add_argument("--text", default="")
+    wx.add_argument("--context-token", default=None)
+    wx.set_defaults(fn=cmd_weixin)
 
     rc = sub.add_parser("recall", help="她现在能想起什么")
     rc.add_argument("query")
