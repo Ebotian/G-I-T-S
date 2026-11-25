@@ -93,6 +93,19 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_quota(args: argparse.Namespace) -> int:
+    """额度账户。像电子账户一样，规则全部可见。"""
+    from .quota import Account, Budget, allowance
+    b = Budget(monthly_cny=args.monthly)
+    a = allowance(b, args.actor)
+    cap = a.cny * 5
+    acct = Account(actor=args.actor, balance=args.balance)
+    print(acct.statement(a.cny, accrue_cap_days=5))
+    print(f"\n  给她看的一行：{acct.hint(a.cny)}")
+    (Path(args.db).parent).mkdir(parents=True, exist_ok=True)
+    return 0
+
+
 def cmd_trace(args: argparse.Namespace) -> int:
     with _open(args) as db:
         print(json.dumps(trace(db, args.outbox_id), ensure_ascii=False, indent=2))
@@ -134,6 +147,12 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("trace")
     t.add_argument("outbox_id", type=int)
     t.set_defaults(fn=cmd_trace)
+
+    q = sub.add_parser("quota", help="额度账户（像电子账户一样可见）")
+    q.add_argument("--actor", default="her")
+    q.add_argument("--monthly", type=float, default=200.0)
+    q.add_argument("--balance", type=float, default=0.0)
+    q.set_defaults(fn=cmd_quota)
 
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)

@@ -58,6 +58,9 @@ class TurnContext:
     stimulus: str
     recalled: tuple[str, ...] = ()
     recent: tuple[tuple[str, str], ...] = ()  # (role, text)
+    #: 额度提示条（§18.6）。**只放在 C 段**——它每花一次就变，
+    #: 塞进 A/B 会把缓存前缀打断（50 倍价差）。十几个 token，很便宜。
+    quota_hint: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,8 @@ def render_b(snap: RelationSnapshot) -> str:
 
 def render_c(ctx: TurnContext) -> str:
     parts = []
+    if ctx.quota_hint:
+        parts.append(ctx.quota_hint)
     if ctx.recent:
         parts.append("# 刚才")
         for role, text in ctx.recent:

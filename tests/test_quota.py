@@ -1,11 +1,11 @@
-"""配额：月度固定 → 每日额度 → **周额度 + 日上限**（周清日结转）。
+"""额度账户：每日入账、攒额上限、日上限、周末清零。
 
-口径：
-  - 月度是唯一固定量，其余派生；三个实例三等分
-  - 周内没花完的自然留在周锅里（结转）；周一清零
-  - **日上限**防止一天花光整周；**钱是唯一硬约束**，分项只做提示
-  - 不花不罚：没花完只是留着
-  - 活动记录只有元数据，没有内容
+用户口径：
+  - 每日增加配给额度 → 不会"花完就卡到周一"
+  - 限制攒额度 → 攒不成"大事基金"
+  - 每日消费上限取三倍配给额度
+  - 每周末清零
+  - 规则要像电子账户一样可见；消耗时附带进度条
 """
 
 from __future__ import annotations
@@ -14,15 +14,21 @@ import dataclasses
 
 import pytest
 
+from gits.context import TurnContext, assemble, PersonaSeed, RelationSnapshot, estimate_tokens
 from gits.quota import (
-    KINDS, UNIT_PRICE, Activity, Budget, Ledger, allowance, allowances,
-    autonomy_pool, day_cap, new_week,
+    KINDS, UNIT_PRICE, Account, Activity, Budget, allowance, allowances, bar,
+    day_cap, new_week_account,
 )
 
 ACTORS = ["her", "peer1", "peer2"]
 B = Budget()
 A = allowance(B, "her")
-FETCH = UNIT_PRICE["fetch"]
+DAILY = A.cny
+CAP = DAILY * 5          # 攒额上限
+
+
+def _acct() -> Account:
+    return Account(actor="her", balance=DAILY)
 
 
 # ── 派生 ────────────────────────────────────────────────────
@@ -36,102 +42,116 @@ def test_三个实例三等分() -> None:
     assert len(set(round(v, 9) for v in vals)) == 1
 
 
-def test_改月预算整体等比缩放() -> None:
-    a = allowances(Budget(monthly_cny=200.0), ACTORS)["her"]
-    b = allowances(Budget(monthly_cny=400.0), ACTORS)["her"]
-    assert b.cny == pytest.approx(a.cny * 2)
-
-
 def test_实例数不对就报错() -> None:
     with pytest.raises(ValueError):
         allowances(Budget(actors=3), ["her", "peer1"])
 
 
-def test_本地算力按时间三等分() -> None:
-    am = allowances(Budget(exec_minutes_per_day=21), ACTORS)
-    assert am["her"].units["exec_sec"] == pytest.approx(21 * 60 / 3)
+# ── 入账 ────────────────────────────────────────────────────
+def test_每天入账一份() -> None:
+    a = _acct()
+    before = a.balance
+    got = a.accrue(DAILY, CAP)
+    assert got == pytest.approx(DAILY)
+    assert a.balance == pytest.approx(before + DAILY)
 
 
-# ── 周额度 + 日上限 ────────────────────────────────────────
-def test_周额度是日额度乘七天() -> None:
-    L = new_week("W1", "mon")
-    assert L.weekly_budget(A, B) == pytest.approx(A.cny * 7)
+def test_攒额有上限() -> None:
+    a = Account(actor="her", balance=CAP)
+    assert a.accrue(DAILY, CAP) == pytest.approx(0.0)
+    assert a.balance == pytest.approx(CAP)
 
 
-def test_日上限封顶() -> None:
-    """一周额度很大，但一天只能花 day_cap——否则"周额度"就等于"当日额度"。"""
-    L = new_week("W1", "mon")
-    assert L.limit_cny("her", A, B) == pytest.approx(day_cap(B, A))
-    assert day_cap(B, A) < A.cny * 7
+def test_入账会重置今日已花() -> None:
+    a = _acct()
+    a.charge(DAILY / 2, DAILY)
+    assert a.spent_today > 0
+    a.accrue(DAILY, CAP)
+    assert a.spent_today == 0
 
 
-def test_没花完的自然留在周锅里() -> None:
-    L = new_week("W1", "mon")
-    assert L.carry_out("her", A, B) == pytest.approx(day_cap(B, A))
-    nxt = L.tomorrow()                       # 今天一分没花
-    assert nxt.spent_before.get("her", 0.0) == 0
-    assert nxt.limit_cny("her", A, B) == pytest.approx(day_cap(B, A))
+def test_花光之后第二天又有() -> None:
+    """这是"每日入账"相对"周锅"的唯一实质差别：不会卡到周一。"""
+    a = _acct()
+    a.charge(a.balance, DAILY)          # 花光
+    assert a.balance == pytest.approx(0.0)
+    assert a.spendable(DAILY) == pytest.approx(0.0)
+    a.accrue(DAILY, CAP)
+    assert a.spendable(DAILY) == pytest.approx(DAILY)
 
 
-def test_连着花满也不会超周额度() -> None:
-    L = new_week("W1", "mon")
-    total = 0.0
-    for _ in range(7):
-        ok, _why = L.charge("her", "fetch", L.limit_cny("her", A, B) / FETCH, A, B)
-        total += L.spent_cny("her")
-        L = L.tomorrow()
-    assert total <= A.cny * 7 + 1e-9
-    assert total > A.cny * 3                  # 确实花掉了不少
+def test_周一从入账开始_不会停在零() -> None:
+    a = new_week_account("her", DAILY, CAP)
+    assert a.balance == pytest.approx(DAILY)
+    assert a.spendable(DAILY) > 0
 
 
-def test_花光之后当周就没有了() -> None:
-    L = new_week("W1", "mon")
-    for _ in range(3):
-        L.charge("her", "fetch", L.limit_cny("her", A, B) / FETCH, A, B)
-        L = L.tomorrow()
-    assert L.limit_cny("her", A, B) == pytest.approx(0.0, abs=1e-9)
-    ok, why = L.charge("her", "fetch", 1, A, B)
-    assert not ok and "只剩" in why
+# ── 日上限 ──────────────────────────────────────────────────
+def test_日上限是三倍日额度() -> None:
+    assert day_cap(B, A) == pytest.approx(DAILY * 3)
+    a = Account(actor="her", balance=CAP)       # 攒了很多
+    assert a.spendable(DAILY) == pytest.approx(DAILY * 3)
 
 
-def test_周一清零() -> None:
-    L = new_week("W1", "mon")
-    L.charge("her", "fetch", L.limit_cny("her", A, B) / FETCH, A, B)
-    assert L.tomorrow().spent_before["her"] > 0
-    assert new_week("W2", "mon").spent_before == {}
-
-
-def test_不花不罚() -> None:
-    """没花完只是留着，不会因为"没用"而减少后面的额度。"""
-    idle = new_week("W1", "mon")
-    for _ in range(3):
-        idle = idle.tomorrow()
-    assert idle.limit_cny("her", A, B) == pytest.approx(day_cap(B, A))
-    assert idle.spent_before.get("her", 0.0) == 0
-
-
-# ── 硬约束只有钱 ────────────────────────────────────────────
-def test_分项只做提示_超了也能花() -> None:
-    """今天想多读点、少写点，是她的自由；按分项卡死等于替她决定用法。"""
-    L = new_week("W1", "mon")
-    many = A.units["fetch"] * 3
-    ok, _why = L.charge("her", "fetch", many, A, B)
+def test_攒多了也花不动() -> None:
+    a = Account(actor="her", balance=CAP)
+    ok, _ = a.charge(CAP, DAILY)
+    assert not ok, "一天不能把攒下的全花掉"
+    ok, _ = a.charge(DAILY * 3, DAILY)
     assert ok
 
 
 def test_超额直接拒绝() -> None:
-    L = new_week("W1", "mon")
-    ok, why = L.charge("her", "fetch", day_cap(B, A) / FETCH * 2, A, B)
-    assert not ok and "只剩" in why
+    a = _acct()
+    ok, why = a.charge(DAILY * 3, DAILY)
+    assert not ok and "还能花" in why
 
 
-def test_各实例的账互不影响() -> None:
-    am = allowances(Budget(), ACTORS)
-    L = new_week("W1", "mon")
-    L.charge("her", "fetch", L.limit_cny("her", am["her"], B) / FETCH, am["her"], B)
-    assert L.spent_cny("her") > 0
-    assert L.spent_cny("peer1") == 0
-    assert L.limit_cny("peer1", am["peer1"], B) == pytest.approx(day_cap(B, am["peer1"]))
+# ── 周末清零 ────────────────────────────────────────────────
+def test_周末清零() -> None:
+    a = Account(actor="her", balance=DAILY * 4, spent_week=1.0)
+    a.week_reset()
+    assert a.balance == 0 and a.spent_week == 0
+
+
+def test_不花不罚() -> None:
+    """不花只是攒着（有上限），不会因为"没用"而扣任何东西。"""
+    a = _acct()
+    for _ in range(3):
+        a.accrue(DAILY, CAP)
+    assert a.balance == pytest.approx(min(CAP, DAILY * 4))
+    assert a.spent_week == 0
+
+
+# ── 可见性 ──────────────────────────────────────────────────
+def test_账户视图包含全部规则() -> None:
+    s = _acct().statement(DAILY)
+    for must in ("余额", "今日可花", "每日入账", "攒额上限", "清零"):
+        assert must in s, must
+
+
+def test_进度条单调且占比正确() -> None:
+    assert bar(0.0).endswith("0%")
+    assert "100%" in bar(1.0)
+    assert "50%" in bar(0.5)
+    assert len(bar(0.5).split("]")[0]) == len(bar(0.0).split("]")[0])
+
+
+def test_提示条足够短() -> None:
+    """她每次开口都能看见，所以要便宜——十几个 token 的量级。"""
+    h = _acct().hint(DAILY)
+    assert estimate_tokens(h) <= 20, (h, estimate_tokens(h))
+
+
+def test_提示条进的是_C_段而不是_A_段() -> None:
+    """塞进 A/B 会打断缓存前缀，那是 50 倍价差。"""
+    seed = PersonaSeed(narrative="我不太会哄人。", version=1)
+    snap = RelationSnapshot(bucket=0, summary="认识 47 天", hubs=(), phase="醒着")
+    base = assemble(seed, snap, TurnContext(stimulus="在吗"))
+    withq = assemble(seed, snap, TurnContext(stimulus="在吗", quota_hint="额度 [██░] 25% 1.5/2.0 元"))
+    assert base.a_hash == withq.a_hash
+    assert base.b == withq.b
+    assert base.c != withq.c
 
 
 # ── 不可观测 ────────────────────────────────────────────────
