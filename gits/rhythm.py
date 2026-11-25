@@ -67,25 +67,71 @@ class Periodicity:
         return self.periods_hours[i], self.power[i]
 
 
-def periodicity_report(t_ms: Sequence[int], *, min_ratio: float = 4.0) -> Periodicity:
-    """先问"你到底有没有节律"。没有的话，后面三层都不该用。"""
+def periodicity_report(t_ms: Sequence[int], *, alpha: float = 0.01,
+                      n_null: int = 40, seed: int = 12345) -> Periodicity:
+    """先问"你到底有没有节律"。没有的话，后面三层都不该用。
+
+    判据不是"比中位数大几倍"（那是拍的），而是**解析的显著性阈值**：
+    事件流退化成相位聚集度后，单个频率的功率在原假设下近似 Exp(1)，
+    扫过 M 个频率的最大值服从，于是
+
+        z* = ln(M / alpha)
+
+    为什么不用解析阈值 `z* = ln(M/alpha)`：那个式子假设"每个事件是一次独立试验"。
+    但真实的对话是**成簇**的——一次会话里隔十几秒连发五条。簇把有效样本数
+    压低、把功率的方差抬高，解析阈值会系统性偏低，于是"无规律"的序列也会
+    被判成有日周期（实测：chaotic 场景 8 个种子里 4 个误报）。
+
+    经验零分布自动带上这个方差，不需要假装独立。错误方向也不对称：
+    判成有节律 → 她在错误的时间开口；判成没节律 → 她多问一句。**宁可保守。**
+    """
     if len(t_ms) < 20:
         return Periodicity((), (), 0.0, False, False, "样本太少，不下结论")
 
     t = (np.asarray(t_ms, dtype=float) - float(np.min(t_ms))) / 1000.0
-    y = np.ones_like(t)
     # 只搜 2 小时到 14 天。更短的周期对人类活动无意义，而且极易与日周期混叠。
     periods_h = np.geomspace(2.0, 24 * 14, 160)
-    p = lomb_scargle(t, y, periods_h * 3600.0)
+    per_s = periods_h * 3600.0
+    p = lomb_scargle(t, np.ones_like(t), per_s)
     med = float(np.median(p)) or 1e-12
     ratio = float(p.max()) / med
 
-    def near(hours: float) -> float:
+    def near(arr: np.ndarray, hours: float) -> float:
         i = int(np.argmin(np.abs(periods_h - hours)))
-        return float(p[max(0, i - 2): i + 3].max())
+        return float(arr[max(0, i - 2): i + 3].max())
 
-    has_daily = near(24) > med * min_ratio
-    has_weekly = near(168) > med * min_ratio
+    # ── 经验零分布：**间隔重采样**，不是均匀重撒、也不是环形平移 ──
+    #
+    # 均匀重撒：把成簇抹平，方差被低估 → 误报（实测 chaotic 10 个种子 4 次）。
+    # 环形平移：对纯周期序列，整体平移不改变相位差，周期图是相位不变的
+    #          → 零分布和观测一样高 → **真正的节律反而检不出来**（踩过）。
+    # 间隔自助：从观测到的间隔里**有放回**抽，重建一条时间轴。
+    #          它保留重尾与成簇，破坏的是"每天同一时刻"这层结构。
+    i24 = int(np.argmin(np.abs(periods_h - 24)))
+    i168 = int(np.argmin(np.abs(periods_h - 168)))
+    idx = np.unique(np.concatenate([np.arange(max(0, i24 - 2), i24 + 3),
+                                    np.arange(max(0, i168 - 2), i168 + 3)]))
+    sub_s = per_s[idx]
+    pos24 = int(np.where(idx == i24)[0][0])
+    pos168 = int(np.where(idx == i168)[0][0])
+    span = float(t.max() - t.min()) or 1.0
+
+    gaps = np.diff(t)
+    gaps = gaps[gaps > 0] if (gaps > 0).any() else np.array([3600.0])
+
+    rng = np.random.default_rng(seed)
+    nul_d, nul_w = [], []
+    for _ in range(n_null):
+        tn = np.concatenate([[0.0], np.cumsum(rng.choice(gaps, size=len(gaps),
+                                                         replace=True))])
+        pn = lomb_scargle(tn, np.ones_like(tn), sub_s)
+        nul_d.append(float(pn[max(0, pos24 - 2): pos24 + 3].max()))
+        nul_w.append(float(pn[max(0, pos168 - 2): pos168 + 3].max()))
+    thr_d = float(np.quantile(nul_d, 1 - alpha))
+    thr_w = float(np.quantile(nul_w, 1 - alpha))
+
+    has_daily = near(p, 24) > thr_d
+    has_weekly = near(p, 168) > thr_w
     verdict = (
         "有日周期" if has_daily else ("只有周周期" if has_weekly else "看不出稳定节律")
     )
