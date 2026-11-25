@@ -46,6 +46,9 @@ class ActorSeed:
 class Bundle:
     actors: list[ActorSeed]
     digest: str          # 整份内容的哈希：幂等键，也用来回答"这是哪份文件"
+    #: 测试/示例包。生产导入器默认拒绝——模板里的词一旦进了生产库，
+    #: 会和真实交互共振并被永久强化。
+    ephemeral: bool = False
 
 
 def _strip_underscore(d: dict) -> dict:
@@ -69,7 +72,7 @@ def parse(text: str) -> Bundle:
     got = top.get("format")
     if got != FORMAT:
         raise Bad(f"format 必须是 {FORMAT}")
-    unknown = set(top) - {"format", "generated_at", "actors"}
+    unknown = set(top) - {"format", "generated_at", "actors", "ephemeral"}
     if unknown:
         raise Bad(f"顶层有未知字段：{sorted(unknown)}")
 
@@ -126,18 +129,33 @@ def parse(text: str) -> Bundle:
         raise Bad(f"必须有且只有一个 main，现在是 {len(mains)} 个")
 
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return Bundle(actors=actors, digest=digest)
+    return Bundle(actors=actors, digest=digest,
+                  ephemeral=bool(top.get("ephemeral")))
 
 
-def describe(b: Bundle) -> str:
-    """校验报告。**只给结构和数值，不回显正文。**"""
-    out = [f"格式 ok（{FORMAT}），摘要 {b.digest}",
-           f"实例 {len(b.actors)} 个："]
+def describe(b: Bundle, *, inspect: bool = False) -> str:
+    """校验报告。**默认连话题名都不给。**
+
+    话题名也是内容：生成脚本随机抽到「深海热泉」「编译原理」，
+    跑一次 dry-run 就把核心关注点全剧透了——那 blind 就白设了。
+    默认只给数量与权重和；要看名字得显式 --inspect。
+    """
+    head = f"格式 ok（{FORMAT}），摘要 {b.digest}"
+    if b.ephemeral:
+        head += "  [ephemeral：示例包，生产默认拒收]"
+    out = [head, f"实例 {len(b.actors)} 个："]
     for a in b.actors:
-        weights = "、".join(f"{k}={v:g}" for k, v in sorted(a.topics.items())) or "无"
+        n = len(a.topics)
+        if not n:
+            weights = "偏好 无"
+        elif inspect:
+            weights = "偏好 " + "、".join(
+                f"{k}={v:g}" for k, v in sorted(a.topics.items()))
+        else:
+            weights = f"偏好 {n} 项（权重和 {sum(a.topics.values()):g}）"
         out.append(f"  {a.actor_id}"
                    f"{'（主）' if a.main else ''}"
-                   f"  自我描述 {len(a.persona)} 字  偏好 {weights}")
+                   f"  自我描述 {len(a.persona)} 字  {weights}")
     return "\n".join(out)
 
 

@@ -1,24 +1,25 @@
 {
-  "_comment": "初始化包的格式。以 _ 开头的键当注释，导入时忽略。正式文件由你们的程序生成；这里的值只是形状示例。",
+  "_comment": "初始化包的格式。以 _ 开头的键当注释，导入时忽略。这是示例包：ephemeral=true，生产导入器默认拒收。",
   "format": "gits-seed/1",
+  "ephemeral": true,
   "generated_at": 1800000000000,
   "actors": [
     {
       "id": "her",
       "main": true,
-      "persona": "一段第一人称的自我描述。三到五句。写她在意什么、怎么说话。",
-      "topics": { "开会": 1.2, "咖啡": 0.8 }
+      "persona": "占位符：一段第一人称的自我描述，三到五句。",
+      "topics": { "topic_alpha": 1.2, "topic_beta": 0.8 }
     },
     {
       "id": "peer1",
       "main": false,
-      "persona": "另一个实例的自我描述。",
-      "topics": { "论文": 1.1 }
+      "persona": "占位符：另一个实例的自我描述。",
+      "topics": { "topic_gamma": 1.1 }
     },
     {
       "id": "peer2",
       "main": false,
-      "persona": "第三个实例的自我描述。",
+      "persona": "占位符：第三个实例的自我描述。",
       "topics": {}
     }
   ]

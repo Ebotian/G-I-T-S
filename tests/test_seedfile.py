@@ -70,11 +70,37 @@ def test_不是_json要说清位置(db) -> None:
         seedfile.parse("{")
 
 
-def test_报告不回显正文(db) -> None:
+def test_报告不回显正文_连话题名都不给(db) -> None:
     b = seedfile.parse(_doc())
     out = seedfile.describe(b)
     assert "我不太会哄人" not in out, "生成它的人本来就不该看到内容"
-    assert "开会=1.2" in out and "字" in out
+    assert "开会" not in out, "话题名也是内容——随机抽到冷门词，跑一次 dry-run 就剧透了"
+    assert "偏好 1 项（权重和 1.2）" in out and "字" in out
+
+
+def test_要看名字得显式_inspect(db) -> None:
+    b = seedfile.parse(_doc())
+    assert "开会=1.2" in seedfile.describe(b, inspect=True)
+
+
+def test_示例包默认拒收(db) -> None:
+    doc = json.loads(_doc())
+    doc["ephemeral"] = True
+    b = seedfile.parse(json.dumps(doc, ensure_ascii=False))
+    assert b.ephemeral
+    assert "示例包" in seedfile.describe(b)
+
+
+def test_模板是无害占位符(db) -> None:
+    import pathlib
+
+    tpl = (pathlib.Path(__file__).resolve().parents[1]
+           / "docs" / "seed-template.json")
+    b = seedfile.parse(tpl.read_text(encoding="utf-8"))
+    assert b.ephemeral, "模板必须自带 ephemeral，防止手滑 --write 进生产"
+    names = {t for a in b.actors for t in a.topics}
+    assert all(n.startswith("topic_") for n in names), \
+        "模板里不能有真实高频生活词——它们会和真实交互共振并被永久强化"
 
 
 def test_写进去之后A段就有了(db) -> None:

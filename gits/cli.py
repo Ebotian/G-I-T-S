@@ -369,8 +369,12 @@ def build_parser() -> argparse.ArgumentParser:
     pn.set_defaults(fn=cmd_persona)
 
     im = sub.add_parser("import-seed", help="导入初始化包（默认只校验）")
-    im.add_argument("path")
+    im.add_argument("path", help="文件路径，或 - 从 stdin 读（推荐：不落盘）")
     im.add_argument("--write", action="store_true", help="真的写进去")
+    im.add_argument("--inspect", action="store_true",
+                    help="校验时打印话题名（默认不打——话题名也是内容）")
+    im.add_argument("--allow-ephemeral", action="store_true",
+                    help="允许导入带 ephemeral 标记的示例包")
     im.set_defaults(fn=cmd_import_seed)
 
     wp = sub.add_parser("wipe", help="清空内容，保留机制（要 --yes）")
@@ -480,22 +484,30 @@ def cmd_import_seed(args: argparse.Namespace) -> int:
     from gits import seedfile
 
     db = DB(Path(args.db))
-    path = Path(args.path)
-    if seedfile.inside_repo(path):
-        print("这个文件在仓库里。换到仓库外面再导——文件不进来，状态才进来。")
-        return 1
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        print(f"读不到：{exc}")
-        return 1
+    if args.path == "-":
+        # 从管道读：明文**根本不落盘**，也就不需要 care 它放在哪
+        text = sys.stdin.read()
+    else:
+        path = Path(args.path)
+        if seedfile.inside_repo(path):
+            print("这个文件在仓库里。换到仓库外面再导——文件不进来，状态才进来。")
+            return 1
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"读不到：{exc}")
+            return 1
     try:
         bundle = seedfile.parse(text)
     except seedfile.Bad as exc:
         print(f"拒绝：{exc}")
         print("（整份拒绝，一条都没写）")
         return 1
-    print(seedfile.describe(bundle))
+    print(seedfile.describe(bundle, inspect=args.inspect))
+    if bundle.ephemeral and not args.allow_ephemeral:
+        print("\n这是示例包（ephemeral），生产环境默认不收。"
+              "真要导就加 --allow-ephemeral。")
+        return 1
     if not args.write:
         print("\n只是校验。要真写就加 --write。")
         return 0
