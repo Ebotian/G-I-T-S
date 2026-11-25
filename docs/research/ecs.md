@@ -114,15 +114,46 @@ fatal: expected flush after ref listing
 ```
 
 它不总是失败——第一次部署就是好的，第二次就挂了，而你会以为是代码问题。
-修法很土但有效：
+
+`http.version HTTP/1.1` **不是万能药**。2026-11-25 又撞上两次连续 60 秒超时，
+而同一条 ssh 里 `curl https://github.com` 返回 200、1.4 秒。
+
+也就是说：**不是没有网，是 git over HTTPS 到 GitHub 会随机挂**。
+诊断过一次成功的 fetch，全程 1 秒内完成，说明握手和打包都正常——
+失败的时候它是在某个点上不动，而不是慢。
+
+结论：**部署不该依赖 GitHub 可达**。见 §5。
+
+## 5. 部署：推到 ECS，不经过 GitHub
+
+GitHub 只是**备份和对外**。部署走另一条路——工作机直接推给 ECS：
 
 ```bash
-git config --global http.version HTTP/1.1
+git push ecs main        # 一条命令 = 部署
 ```
 
-已经写进 `deploy/install.sh`，只在 ECS 上生效，不影响本机。
+一次配置（已经做好了）：
 
-## 5. 部署与回滚
+```bash
+# 服务器上：允许推送到检出树
+git -C /srv/gits config receive.denyCurrentBranch updateInstead
+# 服务器上：推完就重启（.git/hooks/post-receive）
+systemctl restart gits-ghost.service gits-shell.service
+# 本机：把 ECS 加成第二个远端
+git remote add ecs root@115.29.192.144:/srv/gits
+```
+
+为什么这样更好，不只是"绕过网络问题"：
+
+| | 经 GitHub | 直推 ECS |
+|---|---|---|
+| 依赖 | 两个网络 + 第三方 | 一条 ssh |
+| 延迟 | 10–60 s（经常 60 s 超时） | < 2 s |
+| 失败模式 | 静默挂住，看起来像代码错 | 立刻报错 |
+
+**部署路径越短，越敢部署。** 而"敢部署"才是迭代速度的真正来源。
+
+其余：
 
 ```bash
 sudo bash /srv/gits/deploy/install.sh      # 幂等，可以反复跑
@@ -130,7 +161,7 @@ systemctl list-timers gits-housekeep       # 看下次什么时候跑
 journalctl -u gits-housekeep -n 20         # 看昨晚发生了什么
 ```
 
-回滚就是 `git -C /srv/gits reset --hard <commit>` 再跑一次 install.sh。
+回滚：`git push ecs <commit>:main --force`，或服务器上 `git reset --hard <commit>`。
 
 ## 6. 下一步（按依赖顺序）
 
