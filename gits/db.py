@@ -142,6 +142,29 @@ class Writer:
         assert row is not None
         return int(row["id"]), False
 
+    def append_events_bulk(self, rows: Sequence[dict]) -> int:
+        """批量追加（合成数据与回填用）。一个事务，避免逐条 fsync。
+
+        仍然是同一个写连接——批量不等于并发。
+        """
+        n = 0
+        with self.txn() as c:
+            for r in rows:
+                if not r.get("ext_id"):
+                    raise ValueError("ext_id 必须非空")
+                ts = int(r["ts"])
+                recv_ts = int(r.get("recv_ts", ts))
+                cur = c.execute(
+                    "INSERT INTO events(ts, recv_ts, source, kind, ext_id, node_id,"
+                    " payload, lag, ts_trust) VALUES(?,?,?,?,?,?,?,?,?)"
+                    " ON CONFLICT(source, ext_id) DO NOTHING",
+                    (ts, recv_ts, r["source"], r["kind"], r["ext_id"],
+                     r.get("node_id"), r.get("payload"), recv_ts - ts,
+                     1 if recv_ts - ts < 60_000 else 0),
+                )
+                n += cur.rowcount
+        return n
+
     def append_model_call(
         self,
         *,

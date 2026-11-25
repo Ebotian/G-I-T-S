@@ -40,6 +40,21 @@ python -m gits.cli --db /tmp/g.db trace 1
 uv run --python 3.10 --with pytest --with numpy python -m pytest tests -q   # 38 passed
 ```
 
+## 合成数据（`synth/`）
+
+规模不必大，但**必须带真值**——统计类的机制没法靠读代码验证。
+
+```bash
+python -m synth all --days 30        # 五个场景 + 打分，输出 var/synth/report.json
+python -m synth build --scenario drift --days 60 --out var/synth/drift60
+```
+
+五个场景各验证一个机制：`regular`（能学）、`night_owl`（双峰）、`drift`（会漂移）、
+`chaotic`（**该承认自己不知道**）、`offline_gap`（断线=未观测，不是不在）。
+
+数据走正规 `Writer` 写入，所以经过 `ext_id` 幂等 / `lag` / `ts_trust` 全套——
+验证的是线上会跑的代码。细节见 [`synth/README.md`](synth/README.md)。
+
 ## 文档
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — 设计文档。定位与判据、events 真相模型、记忆/触发/装配/叙事/运动皮层/安全、成本、评测、生态位、运行环境、社交层、节律、多端、评审处置、网络与行动

@@ -17,3 +17,5 @@ packages = ["gits"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not slow'"
+markers = ["slow: 用本地资源压规模的测试，默认跳过"]
