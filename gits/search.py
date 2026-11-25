@@ -76,7 +76,10 @@ def bm25_to_sim(rank: float) -> float:
     能放在同一个排序公式里。
     """
     a = abs(rank)
-    return a / (1.0 + a)
+    # 加一个极小量：bm25 在小语料里可能正好是 0（词在所有文档里都有，IDF=0），
+    # 但那条文档**确实命中了**。映射成 0 会让它和"没命中"无法区分，
+    # 排序也就退化成插入顺序。0.001 不影响单调性，只保住"命中"这件事。
+    return (a + 1e-3) / (1.0 + a)
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,7 @@ def search(conn: sqlite3.Connection, query: str, *, k: int = 10,
            recency_of: Callable[[str], float] | None = None,
            vec_of: Callable[[str], float] | None = None,
            candidates_of: Callable[[str], Iterable[tuple[str, float]]] | None = None,
+           context: str = "",
            w: Weights = Weights()) -> list[Hit]:
     """检索。词面是主路，向量是**另一条召回通道**（不是重排钩子）。
 
@@ -119,7 +123,9 @@ def search(conn: sqlite3.Connection, query: str, *, k: int = 10,
     而"间接提问"恰恰全是这种情况。
     """
     ensure_fts(conn)
-    tokens = tokenize(query)
+    # ★ 上下文扩展：指代是靠刚聊过的东西解析的，不是靠记忆库（retrieval.md §4）。
+    # 它不需要任何模型，把最近几轮原文拼进来就行。
+    tokens = tokenize((context + " " + query).strip() if context else query)
     if not tokens.strip():
         return []
 
