@@ -155,15 +155,21 @@ class Shell:
             )
 
     def _link_reply(self, t: int) -> None:
-        """把这次回复挂到最近一条已发出的 outbox 上。
+        """把这次回复挂到**一条还没被回过的**已发送 outbox 上。
 
         没有这一步，`outcomes` 永远是空的——而 `influence` 的强化
         全靠它（§3.2：「她能学习的唯一途径」）。
+
+        第一版取的是"最近一条 sent"，于是同一行被挂了两次 reply，
+        而她其实只被回了一次。改成：**只挂还没有 reply 的那条**。
         """
         row = self.db.one(
-            "SELECT id FROM outbox WHERE status='sent' ORDER BY id DESC LIMIT 1")
+            "SELECT o.id FROM outbox o WHERE o.status='sent'"
+            " AND NOT EXISTS (SELECT 1 FROM outcomes x"
+            "                 WHERE x.outbox_id=o.id AND x.kind='reply')"
+            " ORDER BY o.id DESC LIMIT 1")
         if row is None:
-            return
+            return                      # 没发过、或都回过了——不硬凑
         with self.w.txn() as c:
             c.execute("INSERT INTO outcomes(outbox_id, ts, kind, ref_event_id)"
                       " VALUES(?,?,?,NULL)", (row["id"], t, "reply"))
