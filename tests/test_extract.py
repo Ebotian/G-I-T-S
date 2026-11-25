@@ -90,8 +90,21 @@ def test_模型胡说不落账(db, monkeypatch) -> None:
     with pytest.raises(ValueError):
         E.extract(db, ev)
     # 原始输出留着——它才是"为什么抽不出来"的证据
-    assert db.scalar("SELECT count(*) FROM model_calls WHERE kind='extract'") == 1
+    assert db.scalar("SELECT count(*) FROM model_calls WHERE kind='extract_failed'") == 1
+    assert db.scalar("SELECT count(*) FROM model_calls WHERE kind='extract'") == 0
     assert db.scalar("SELECT count(*) FROM nodes WHERE kind='episode'") == 0
+    # 失败不算"抽过了"，下一拍还会再试
+    assert len(E.pending(db)) == 1
+
+
+def test_抽不出来的不无限重试(db, monkeypatch) -> None:
+    monkeypatch.setattr(E, "chat", lambda *a, **k: Reply(
+        text="抱歉", model="stub", usage={}, latency_ms=1))
+    ev = _msg(db, "在吗")
+    for _ in range(E.MAX_TRIES):
+        with pytest.raises(ValueError):
+            E.extract(db, ev)
+    assert E.pending(db) == [], "抽了 %d 次还不行，就放过它" % E.MAX_TRIES
 
 
 def test_待抽的只看没抽过的(db, stub) -> None:

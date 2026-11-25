@@ -87,12 +87,19 @@ def done(db: DB, event_id: int) -> bool:
                   " AND event_id=? LIMIT 1", (event_id,)) is not None
 
 
+#: 一条消息最多抽几次。失败会留下证据（extract_failed），但不能
+#: 无限重试——一条抽不出来的消息不该让她每两秒烧一次钱。
+MAX_TRIES = 3
+
+
 def pending(db: DB, *, limit: int = 5) -> list[dict]:
     return [dict(r) for r in db.q(
         "SELECT e.* FROM events e WHERE e.kind IN ('msg_in','inner')"
         " AND NOT EXISTS (SELECT 1 FROM model_calls m WHERE m.kind='extract'"
         "                 AND m.event_id=e.id)"
-        " ORDER BY e.id LIMIT ?", (limit,))]
+        " AND (SELECT count(*) FROM model_calls m2 WHERE m2.kind='extract_failed'"
+        "      AND m2.event_id=e.id) < ?"
+        " ORDER BY e.id LIMIT ?", (MAX_TRIES, limit))]
 
 
 def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
@@ -102,16 +109,26 @@ def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
     在重放时报 MissingModelResult，而那条消息再也抽不出来了。"""
     text = (event["payload"] or b"").decode("utf-8", "replace")
     msgs = [{"role": "user", "content": PROMPT.replace("{text}", text)}]
-    reply: Reply = chat(msgs, model=model, max_tokens=800, temperature=0.0,
+    # max_tokens 要留够：思考 token 也算 completion token。实测 800 时
+    # 一次 thinking=high 把 800 全烧在 reasoning 上，可见输出是空字符串。
+    reply: Reply = chat(msgs, model=model, max_tokens=2000, temperature=0.0,
                         thinking=thinking, effort=effort)
 
     raw = reply.text
+    try:
+        payload = parse(raw)
+    except ValueError:
+        # 抽不出来**不落 extract**：落了它，这条消息就永远"已完成"了。
+        # 但也得留证据——原始输出才是"为什么抽不出来"的唯一线索。
+        Writer(db).append_model_call(
+            kind="extract_failed", model=reply.model, response=raw,
+            event_id=event["id"], usage_json=str(reply.usage), ts=ts)
+        raise
+
     Writer(db).append_model_call(
         kind="extract", model=reply.model, response=raw,
         event_id=event["id"], usage_json=str(reply.usage),
         prompt_hash=None, ts=ts)
-
-    payload = parse(raw)
     nid = apply(db, event, payload, ts=ts)
     return Extracted(
         event_id=event["id"], summary=payload["summary"], node_id=nid,
