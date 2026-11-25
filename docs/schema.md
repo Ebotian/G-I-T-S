@@ -30,7 +30,9 @@ gits-graph.db    派生。synchronous=NORMAL，丢了从 events 重放
 gits-ops.db      作业与积压。丢了可以重新排队，不影响她记得什么
 
 工作机副本（只读，可整个删掉重建）
-gits-replica.db  = events 副本 + 本地重放出的图 + events_pending（唯一写入口）
+gits-replica.db  = 日志集副本（events / model_calls / observability / redactions）+ 本地重放出的图
+gits-pending.db  = events_pending（唯一写入口，收到 ECS 提交应答后才删除）
+                   ★ 与副本分开：副本可整库重建，pending 不行（§15.8.2）
 ```
 
 分开的理由不是洁癖：`FULL` 的 fsync 很贵，但只对 `events` 值得。
@@ -50,9 +52,14 @@ events(
   ext_id    TEXT    NOT NULL,      -- ★ 确定性幂等键，不许 NULL（见 §3.1）
   node_id   TEXT,
   payload   BLOB,
+  lag       INTEGER,               -- recv_ts - ts，上传延迟（§14.0）
+  ts_trust  INTEGER,               -- 1 = 该事件的 ts 可用于节律训练
   UNIQUE(source, ext_id)
 );
 CREATE INDEX events_recv ON events(recv_ts);
+
+-- 删除的影子表（§15.8.1）：整库重建时靠它把已删的再删一遍
+redactions(event_id INTEGER PRIMARY KEY, ts INTEGER);
 
 -- 可观测性：她当时能不能看见（§14.4）
 observability(channel TEXT, ts_start INTEGER, ts_end INTEGER,
@@ -146,8 +153,10 @@ backlog(kind TEXT PRIMARY KEY, n INTEGER, oldest_ts INTEGER);
 -- 节点心跳
 nodes_health(node_id TEXT PRIMARY KEY, last_seen INTEGER, caps TEXT, idle_since INTEGER);
 
--- 副本同步游标（§15.8）：同步协议就是重放协议，只需要一个 id
-sync_cursor(node_id TEXT PRIMARY KEY, last_event_id INTEGER);
+-- 副本同步游标（§15.8）：按流各记一个，不是只有一个 id
+sync_cursor(node_id TEXT, stream TEXT, last_id INTEGER,
+            last_sync_ok INTEGER, PRIMARY KEY(node_id, stream));
+-- stream: events | model_calls | observability | redactions
 
 -- 配给制（§18.4）：她是知情的，余额是她的状态而不是你的开关
 quota(day TEXT, kind TEXT, used INTEGER, limit INTEGER, PRIMARY KEY(day, kind));
