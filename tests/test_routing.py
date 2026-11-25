@@ -71,4 +71,5 @@ def test_claim_按名字过滤(db) -> None:
     _row(db, "weixin")
     _row(db, "file")
     assert len(claim(db, now=T0, names=frozenset({"weixin"}))) == 1
-    assert len(claim(db, now=T0, names=None)) == 2
+    # 第二次要等租约过期——否则拿到的是"已经租出去"的那条（空）
+    assert len(claim(db, now=T0 + 120_000, names=None)) == 2
