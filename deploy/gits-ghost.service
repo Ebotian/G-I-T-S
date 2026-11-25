@@ -1,0 +1,24 @@
+[Unit]
+Description=G-I-T-S 内核（心跳 / 投递 / 快照）
+Documentation=file:/srv/gits/docs/research/ecs.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Type=notify + WatchdogSec：进程卡死会被 systemd 重启，
+# 而不是显示 active 却什么都不干。ghost 每拍发一次 WATCHDOG=1。
+Type=notify
+NotifyAccess=main
+WatchdogSec=120
+Restart=always
+RestartSec=2
+
+WorkingDirectory=/srv/gits
+# 有真通道之前，投递写到文件里——这样投递这一步是可验证的，不是空转
+ExecStart=/srv/gits/.venv/bin/python -m gits.cli --db /srv/gits/var/gits.db ghost --node cloud --outbox-file /srv/gits/var/outbox.log
+
+MemoryMax=200M
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

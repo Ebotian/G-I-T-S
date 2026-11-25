@@ -106,6 +106,19 @@ def cmd_quota(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ghost(args: argparse.Namespace) -> int:
+    """常驻内核。第一版只做：心跳、投递、快照。"""
+    import asyncio as _asyncio
+
+    from .ghost import FileTransport, NullTransport, serve
+
+    transport = FileTransport(args.outbox_file) if args.outbox_file else NullTransport()
+    with _open(args) as _db:
+        pass                                  # 只为建库/迁移，随后 serve 自己开
+    return _asyncio.run(serve(args.db, node=args.node, transport=transport,
+                              once=args.once))
+
+
 def cmd_recall(args: argparse.Namespace) -> int:
     """她此刻能想起什么。走真实的 nodes / node_content / FTS / r。"""
     from .recall import recall
@@ -228,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
     vf = sub.add_parser("verify", help="比较两份库重放后的投影")
     vf.add_argument("--src", required=True)
     vf.set_defaults(fn=cmd_verify)
+
+    gh = sub.add_parser("ghost", help="常驻内核（心跳/投递/快照）")
+    gh.add_argument("--node", default="cloud")
+    gh.add_argument("--outbox-file", default=None, help="投递到文件（没有真通道时）")
+    gh.add_argument("--once", action="store_true", help="只跑一拍就退出（测试用）")
+    gh.set_defaults(fn=cmd_ghost)
 
     rc = sub.add_parser("recall", help="她现在能想起什么")
     rc.add_argument("query")
