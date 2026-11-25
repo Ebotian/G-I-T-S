@@ -98,7 +98,6 @@ class Ghost:
     #: 回复间隔。每拍最多回一条——一次调用要几秒，
     #: 不能让它把心跳和快照挤掉。
     reply_ms: int = 1_000
-    persona_path: str | None = None
     _last_reply: int = 0
     #: 抽取是后台活，没人在等——放慢一点，别和回话抢 timeout。
     extract_ms: int = 2_000
@@ -113,7 +112,6 @@ class Ghost:
     #: 人格更新。**默认只判定、不动作**（GITS_PERSONA_APPLY=1 才真写）——
     #: 这种行为一旦判错，第二天才发现，而那时候已经不可逆了。
     persona_apply: bool = False
-    persona_text: str = ""
     _last_night: int = 0
     _last_beat: int = 0
     _last_snapshot: int = 0
@@ -215,14 +213,13 @@ class Ghost:
         if not self.persona_apply:
             return f"（只判定）{chk.why}"
         try:
-            got = persona.update(self.db, now=t, fallback=self.persona_text)
+            got = persona.snapshot(self.db, now=t)
         except Exception as exc:
             self.last_error = f"persona: {type(exc).__name__}: {exc}"
             return "persona 失败"
         if got is None:
-            return f"{chk.why}；但今天没有新经历，不更新"
-        return (f"{'保持' if got.keep else f'改 {got.changes} 处'}"
-                f" → v{persona.latest(self.db).version}")
+            return f"{chk.why}；但自我域里没有可选的东西，不更新"
+        return f"{chk.why} → 第 {len(got.picked)} 个节点写成 v{got.event_id}"
 
     def window(self, t: int | None = None) -> str:
         """该不该换窗。**整理是后台活，先在闲得够久的时候做。**"""
@@ -267,12 +264,11 @@ class Ghost:
 
     def reply(self, t: int | None = None) -> int:
         """该回的话回一句。失败**不重试到天荒地老**——记下来，下一拍再说。"""
-        from gits.respond import load_persona, respond_pending
+        from gits.respond import respond_pending
 
         self._last_reply = now_ms() if t is None else t
         try:
-            turns = respond_pending(self.db, limit=1,
-                                    persona=load_persona(self.persona_path))
+            turns = respond_pending(self.db, limit=1)
         except Exception as exc:                     # 模型挂了不能带走进程
             self.last_error = f"{type(exc).__name__}: {exc}"
             return 0
@@ -281,15 +277,10 @@ class Ghost:
 
 
 async def serve(db_path: str | Path, *, node: str = "cloud",
-                persona_path: str | None = None, once: bool = False,
-                persona_apply: bool = False) -> int:
+                once: bool = False, persona_apply: bool = False) -> int:
     """常驻循环。SIGTERM 时**把手上这一拍做完再退**。"""
     db = DB(db_path)
-    text = ""
-    if persona_path and Path(persona_path).exists():
-        text = Path(persona_path).read_text(encoding="utf-8").strip()
-    ghost = Ghost(db=db, node=node, persona_path=persona_path,
-                  persona_text=text, persona_apply=persona_apply)
+    ghost = Ghost(db=db, node=node, persona_apply=persona_apply)
 
     def _stop(*_: object) -> None:
         ghost.stopped = True

@@ -35,6 +35,10 @@ MIN_RECUR_DEEP = 3
 MIN_WEEKS = 3
 #: 每个实体簇的容量上限（只是上限，不是配额）
 CAPACITY = 24
+#: 至少还有这么多条活着，才值得压。
+#: 注意不是"活着 > 容量"——间隔重复的簇在任意时刻大部分都在遗忘，
+#: 那条门槛永远跨不过去。容量看总数，遗忘只看"还剩几条值得留下"。
+MIN_ALIVE = 2
 #: 压缩时留几条最不相似的样本（留纹理，不是留典型）
 KEEP = 3
 
@@ -121,9 +125,16 @@ def cluster_of(db: DB, entity: str) -> Cluster:
 
 
 def entities(db: DB) -> list[str]:
-    return [str(r["content"]) for r in db.q(
-        "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
-        " WHERE n.kind='entity' ORDER BY n.id")]
+    """实体名，去重。同一个实体可能有多行内容（不同消息各插过一次），
+    但簇是按节点算的，名字重复会让调度排同一件事好几遍。"""
+    seen: list[str] = []
+    for r in db.q(
+            "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
+            " WHERE n.kind='entity' ORDER BY n.id"):
+        name = str(r["content"])
+        if name not in seen:
+            seen.append(name)
+    return seen
 
 @dataclass
 class Compacted:
@@ -255,3 +266,72 @@ def compact(db: DB, entity: str, *, now: int | None = None,
                      children=len(press), summary=summary,
                      ratio=round(raw_chars / max(1, len(summary)), 2),
                      cost=cost_cny(reply.usage))
+
+# ── 调度：由容量边界和遗忘决定，不是由日历 ─────────────────
+
+
+def alive_count(db: DB, entity: str, *, now: int) -> int:
+    from gits.fsrs import DAY, retrievability
+
+    n = 0
+    for nid in cluster_of(db, entity).node_ids:
+        row = db.one("SELECT s, last_touch FROM nodes WHERE id=?", (nid,))
+        if row is None or not row["s"] or row["last_touch"] is None:
+            continue
+        elapsed = max(0.0, (now - int(row["last_touch"])) / DAY)
+        if retrievability(elapsed, float(row["s"])) >= 0.35:
+            n += 1
+    return n
+
+
+def plan(db: DB, *, now: int, limit: int = 3) -> list[tuple[str, str]]:
+    """该压谁。**不看日历，看容量和遗忘。**
+
+    两件事同时成立才排：
+
+      簇里还活着的东西超过容量   容量是形状——压了才有地方
+      独立重述够数               复现是动力——压了才有意义
+
+    反过来：一个簇里大部分节点已经 r<0.35（在忘），就不压它——
+    它正在自己消失，压它只是把模糊的话留住。
+    """
+    jobs: list[tuple[float, str, str]] = []
+    for name in entities(db):
+        cl = cluster_of(db, name)
+        if not cl.can_compact():
+            continue
+        alive = alive_count(db, name, now=now)
+        if alive < MIN_ALIVE:
+            continue                      # 全都在被忘：压它只是把模糊的话留住
+        jobs.append((float(alive * max(1, cl.recurrence)), name,
+                     f"活着 {alive} 条、复现 {cl.recurrence} 次"))
+    jobs.sort(reverse=True)
+    out: list[tuple[str, str]] = []
+    for _score, name, why in jobs:
+        if any(name == n for n, _w in out):
+            continue
+        out.append((name, why))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def run(db: DB, *, now: int, limit: int = 3,
+        model: str = "deepseek-flash") -> list:
+    """按 plan 压几轮。失败不重试——下一拍还会排到它。"""
+    out = []
+    for name, _why in plan(db, now=now, limit=limit):
+        try:
+            got = compact(db, name, now=now, model=model)
+        except Exception:
+            continue
+        if got is not None:
+            out.append(got)
+    return out
+
+
+def depth_histogram(db: DB) -> dict[int, int]:
+    """深度直方图应当单调递减。平坦就不是漏斗，是摘要堆。"""
+    return {int(r["depth"]): int(r["n"]) for r in db.q(
+        "SELECT depth, count(*) n FROM nodes WHERE kind IN ('abstract','episode')"
+        " GROUP BY depth ORDER BY depth")}

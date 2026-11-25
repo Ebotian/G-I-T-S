@@ -100,10 +100,10 @@ def _stub(monkeypatch, payload: dict):
     return calls
 
 
-def _many(db: DB, n: int = 30, *, gap_days: int = 21) -> None:
+def _many(db: DB, n: int = 30, *, gap_days: int = 21, s: float = 3.0) -> None:
     for i in range(n):
         _episode(db, f"n:{i}", T0 + i * gap_days * DAY,
-                 f"他又因为那个 PR 跟人吵了一架（第{i}次）", "PR")
+                 f"他又因为那个 PR 跟人吵了一架（第{i}次）", "PR", s)
 
 
 def test_压出来的东西带具体指称(db, monkeypatch) -> None:
@@ -152,3 +152,35 @@ def test_压出来的东西能重放(db, monkeypatch) -> None:
     assert n >= 1
     row = db.one("SELECT content FROM node_content WHERE node_id=?", (got.node_id,))
     assert row["content"] == "他对那个 PR 的取舍很在意。"
+
+
+# ── 调度 ─────────────────────────────────────────────────────
+
+
+def test_调度只看容量和遗忘_不看日历(db) -> None:
+    _many(db, n=30)
+    jobs = funnel.plan(db, now=T0 + 29 * 21 * DAY + DAY)
+    assert [j[0] for j in jobs] == ["PR"]
+    assert "活着" in jobs[0][1]
+
+
+def test_正在被遗忘的簇不压(db) -> None:
+    # 30 条都老得差不多想不起来了：压它只是把模糊的话留住
+    for i in range(30):
+        _episode(db, f"n:{i}", T0 + i * 21 * DAY, f"PR 第{i}次", "PR", 1.0)
+    long_after = T0 + 30 * 21 * DAY + 400 * DAY
+    assert funnel.plan(db, now=long_after) == []
+
+
+def test_没有复现的簇排不上(db) -> None:
+    for i in range(40):
+        _episode(db, f"n:{i}", T0 + i * 60_000, f"汉堡店第{i}次", "汉堡店")
+    assert funnel.plan(db, now=T0 + 60_000) == []
+
+
+def test_深度直方图能看出来是不是漏斗(db, monkeypatch) -> None:
+    _many(db)
+    _stub(monkeypatch, {"summary": "他对那个 PR 的取舍很在意。", "why": "x"})
+    funnel.compact(db, "PR")
+    hist = funnel.depth_histogram(db)
+    assert hist.get(0, 0) > hist.get(1, 0), "原件比摘要多——这才叫漏斗"

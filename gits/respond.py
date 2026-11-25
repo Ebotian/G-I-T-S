@@ -36,13 +36,26 @@ def persona_file(path: str | Path) -> Path:
     return Path(path)
 
 
-def load_persona(path: str | Path | None) -> PersonaSeed:
-    """A 段。**一天换一次**就够，所以从文件读；文件变了才换版本号。"""
-    if path and Path(path).exists():
-        text = Path(path).read_text(encoding="utf-8").strip()
-        return PersonaSeed(narrative=text, version=int(
-            Path(path).stat().st_mtime))
-    return PersonaSeed(narrative=DEFAULT_PERSONA, version=0)
+class NoPersona(RuntimeError):
+    """还没有任何自我描述。**这时候不该说话。**"""
+
+
+def load_persona(db: DB | None = None) -> PersonaSeed:
+    """A 段：最近一次夜里"选"出来的那版快照。
+
+    **不读文件。**初始设定也是事件（seed），和后来的独白同一个 kind、
+    同一条重放路径——所以它会衰减、会被顶掉，地位和别人一样。
+    """
+    if db is None:
+        raise NoPersona("load_persona 需要 db：人格现在存在事件里，不是文件里")
+    from gits.persona import current
+
+    cur = current(db)
+    if cur is None or not cur["narrative"]:
+        raise NoPersona(
+            "还没有自我描述。先导入种子：gits seed \"……\"，"
+            "或者等夜里跑一次 persona.snapshot")
+    return PersonaSeed(narrative=cur["narrative"], version=cur["version"])
 
 
 def recent(db: DB, *, actor: str = "her", from_id: int | None = None,
@@ -106,7 +119,7 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     history = recent(db, actor=actor,
                      from_id=win["first_event_id"] if win else None,
                      until_id=event["id"])
-    seed = persona or load_persona(None)
+    seed = persona or load_persona(db)
     snap = relation(db, now=now)
     hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)

@@ -31,6 +31,11 @@ def db(tmp_path: Path):
     d.close()
 
 
+def _persona(db: DB) -> None:
+    from gits.persona import seed
+    seed(db, "我不太会哄人。我记得住具体的事。", now=T0)
+
+
 def _msg(db: DB, text: str, ext: str = "m1") -> int:
     ev, _ = Writer(db).append_event(source="shell", kind="msg_in", ext_id=ext,
                                     ts=T0, recv_ts=T0, payload=text.encode())
@@ -51,6 +56,7 @@ def stub(monkeypatch):
 
 
 def test_一条消息只回一次(db, stub) -> None:
+    _persona(db)
     ev = _msg(db, "开会开到吐")
     assert len(R.pending(db)) == 1
     R.respond(db, R.pending(db)[0])
@@ -59,6 +65,7 @@ def test_一条消息只回一次(db, stub) -> None:
 
 
 def test_回复先落库并带上收件人(db, stub) -> None:
+    _persona(db)
     _msg(db, "在吗")
     t = R.respond(db, R.pending(db)[0])
     row = db.one("SELECT status, channel, meta, ref_event_id FROM outbox WHERE id=?",
@@ -68,6 +75,7 @@ def test_回复先落库并带上收件人(db, stub) -> None:
 
 
 def test_每次调用都记账且可溯源(db, stub) -> None:
+    _persona(db)
     ev = _msg(db, "在吗")
     t = R.respond(db, R.pending(db)[0])
     call = db.one("SELECT kind, event_id, prompt_hash FROM model_calls")
@@ -77,6 +85,7 @@ def test_每次调用都记账且可溯源(db, stub) -> None:
 
 
 def test_A_段在同一版人格下逐字不变(db, stub) -> None:
+    _persona(db)
     _msg(db, "一", "m1")
     _msg(db, "二", "m2")
     for ev in R.pending(db):

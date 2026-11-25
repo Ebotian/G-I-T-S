@@ -165,6 +165,19 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "seed":
+        # 初始设定就是一条普通的自我域记忆——和后来的独白同一个投影路径。
+        # **它就是第一版人格**：不需要模型，也不需要文件。
+        nid = node_id_for(row["source"], row["ext_id"])
+        conn.execute(
+            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
+            " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+            (nid, "self", row["ts"], row["scope"], 1.0, 1.0, row["ts"]))
+        conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                     " VALUES(?,?,?)",
+                     (nid, response.decode("utf-8", "replace")
+                      if isinstance(response, bytes) else str(response), row["ts"]))
+        return
     if row["kind"] == "funnel":
         # 漏斗压出来的抽象。**它自己也是一个节点**——会衰减、会被再压缩。
         # 不可检索的是它的原件，不是它。
@@ -243,7 +256,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
     }
 
     sql = ("SELECT * FROM events WHERE kind IN"
-           " ('msg_in','inner','consolidate','persona','funnel')")
+           " ('msg_in','inner','consolidate','persona','funnel','seed')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -262,7 +275,8 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
                 continue
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
-                        if row["kind"] in ("consolidate", "persona", "funnel")
+                        if row["kind"] in ("consolidate", "persona", "funnel",
+                                           "seed")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(

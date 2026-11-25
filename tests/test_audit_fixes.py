@@ -87,6 +87,8 @@ def test_回复发给触发它的那个人(db) -> None:
     class Stub:
         pass
 
+    from gits.persona import seed
+    seed(db, "我不太会哄人。", now=T0)
     _msg(db, "我是 A", "m1", "uA", "tokA")
     ev_b = _msg(db, "我是 B", "m2", "uB", "tokB")
 

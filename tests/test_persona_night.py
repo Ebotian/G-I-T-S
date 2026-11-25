@@ -110,10 +110,20 @@ def test_样本不够就说不知道(db) -> None:
     assert not got.ok and "看不出" in got.why
 
 
-# ── persona ──────────────────────────────────────────────────
+
+# ── persona：从自我域的节点里选，不是读文件 ──────────────────
 
 
-SEED = "我不太会哄人。我记得住具体的事。"
+def _self_node(db: DB, nid: str, text: str, *, ts: int = T0, s: float = 30.0,
+               depth: int = 0, actor: str = "her") -> None:
+    from gits.scope import self_of
+
+    with Writer(db).txn() as c:
+        c.execute("INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch,"
+                  " depth) VALUES(?,?,?,?,?,?,?,?)",
+                  (nid, "episode", ts, self_of(actor), s, 1.0, ts, depth))
+        c.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                  " VALUES(?,?,?)", (nid, text, ts))
 
 
 def _chat(monkeypatch, payload: str):
@@ -122,89 +132,79 @@ def _chat(monkeypatch, payload: str):
     def fake(messages, **kw):
         calls.append(messages)
         return Reply(text=payload, model="stub",
-                     usage={"completion_tokens": 30, "prompt_tokens": 500},
-                     latency_ms=5)
+                     usage={"completion_tokens": 60, "prompt_tokens": 500},
+                     latency_ms=4)
 
     monkeypatch.setattr(persona, "chat", fake)
     return calls
 
 
-def _evidence(db: DB, n: int = 5) -> list[int]:
-    ids = []
-    for i in range(n):
-        ev, _ = Writer(db).append_event(source="shell", kind="msg_in",
-                                        ext_id=f"e{i}", ts=T0 + i, recv_ts=T0 + i,
-                                        payload=f"第{i}句".encode())
-        ids.append(ev)
-    return ids
+def test_种子是一条普通事件(db) -> None:
+    ev = persona.seed(db, "我不太会哄人。", now=T0)
+    row = db.one("SELECT kind, scope, payload FROM events WHERE id=?", (ev,))
+    assert row["kind"] == "seed" and row["scope"] == "self:her"
+    assert row["payload"].decode() == "我不太会哄人。"
 
 
-def test_没有新经历就不调模型(db, monkeypatch) -> None:
-    calls = _chat(monkeypatch, "{}")
-    assert persona.update(db, fallback=SEED) is None
+def test_没有自我描述时不说话(db) -> None:
+    from gits.respond import NoPersona, load_persona
+
+    with pytest.raises(NoPersona, match="种子"):
+        load_persona(db)
+
+
+def test_初始设定和记忆地位平等(db) -> None:
+    _self_node(db, "n:seed", "我不太会哄人。", s=30.0)
+    _self_node(db, "n:recent", "今天他说了很多。", s=30.0)
+    got = persona.candidates(db, now=T0)
+    assert {c["id"] for c in got} == {"n:seed", "n:recent"}
+    # 没有"这是人格所以要保护"的分支——排序只看 r 和深度
+    assert [c["r"] for c in got] == pytest.approx([1.0, 1.0])
+
+
+def test_想不起来的就不进人格(db) -> None:
+    _self_node(db, "n:old", "很久以前的一句", ts=T0 - 400 * DAY, s=3.0)
+    _self_node(db, "n:new", "最近的一句", ts=T0)
+    got = [c["id"] for c in persona.candidates(db, now=T0)]
+    assert got == ["n:new"], "初始设定如果一直没人提，就该掉出去"
+
+
+def test_快照只用选中的节点(db, monkeypatch) -> None:
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _self_node(db, "n:b", "他说过想换个城市")
+    calls = _chat(monkeypatch, "我不太会哄人。我记得住他讨厌什么。")
+    got = persona.snapshot(db, now=T0)
+    assert got is not None and len(got.picked) == 2
+    assert "他讨厌没有结论的会" in calls[0][0]["content"]
+    assert "我不太会哄人" in got.narrative
+
+
+def test_快照是事件且能重放(db, monkeypatch) -> None:
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "我不太会哄人。")
+    got = persona.snapshot(db, now=T0)
+    assert got is not None
+    ev = db.one("SELECT kind, payload FROM events WHERE id=?", (got.event_id,))
+    assert ev["kind"] == "persona"
+    import json as _json
+
+    assert _json.loads(ev["payload"])["picked"] == ["n:a"]
+    assert project.restore(db) >= 1
+
+
+def test_没有可选节点就不调模型(db, monkeypatch) -> None:
+    calls = _chat(monkeypatch, "x")
+    assert persona.snapshot(db, now=T0) is None
     assert calls == [], "从空气里写自我描述是种病"
 
 
-def test_改一句要有依据(db, monkeypatch) -> None:
-    ids = _evidence(db)
-    _chat(monkeypatch, json.dumps({"keep": False, "changes": [
-        {"old": "我记得住具体的事。", "new": "我记得住具体的事，但不追问。",
-         "because": [ids[0], ids[1]]}]}, ensure_ascii=False))
-    got = persona.update(db, fallback=SEED)
-    assert got is not None and not got.keep and got.changes == 1
-    assert "但不追问" in got.narrative
-    assert persona.latest(db).version == 1
-
-
-def test_没有依据的改动整次作废(db, monkeypatch) -> None:
-    _evidence(db)
-    _chat(monkeypatch, json.dumps({"changes": [
-        {"old": "我记得住具体的事。", "new": "我什么都不记得。", "because": []}]},
-        ensure_ascii=False))
-    with pytest.raises(ValueError, match="没有依据"):
-        persona.update(db, fallback=SEED)
-    assert persona.latest(db) is None
-
-
-def test_依据的事件必须真实存在(db, monkeypatch) -> None:
-    _evidence(db)
-    _chat(monkeypatch, json.dumps({"changes": [
-        {"old": "我记得住具体的事。", "new": "我记不住了。",
-         "because": [999999]}]}, ensure_ascii=False))
-    with pytest.raises(ValueError, match="不存在"):
-        persona.update(db, fallback=SEED)
-
-
-def test_改太多就当它在重写(db, monkeypatch) -> None:
-    ids = _evidence(db)
-    _chat(monkeypatch, json.dumps({"changes": [
-        {"old": "我记得住具体的事。", "new": "长" * 100,
-         "because": [ids[0]]}]}, ensure_ascii=False))
-    with pytest.raises(ValueError, match="改太多"):
-        persona.update(db, fallback=SEED)
-
-
-def test_没变化也是合法结果(db, monkeypatch) -> None:
-    _evidence(db)
-    calls = _chat(monkeypatch, json.dumps({"keep": True, "changes": []}))
-    got = persona.update(db, fallback=SEED)
-    assert got is not None and got.keep and got.changes == 0
-    assert len(calls) == 1
-    assert persona.latest(db).version == 0, "没变就不该涨版本号"
-
-
-def test_人格版本能被重放(db, monkeypatch) -> None:
-    ids = _evidence(db)
-    _chat(monkeypatch, json.dumps({"changes": [
-        {"old": "我记得住具体的事。", "new": "我记得住具体的事，但不追问。",
-         "because": [ids[0]]}]}, ensure_ascii=False))
-    persona.update(db, fallback=SEED)
-    for r in db.q("SELECT id FROM events WHERE kind='msg_in'"):
-        Writer(db).append_model_call(kind="extract", model="stub",
-                                     event_id=r["id"], response='{"summary":"x"}')
-    n = project.restore(db)
-    assert n == 6, "五条消息 + 一版人格"
-    got = db.scalar(
-        "SELECT c.content FROM node_content c JOIN nodes n ON n.id=c.node_id"
-        " WHERE n.kind='self'")
-    assert "但不追问" in got
+def test_上一版会进候选_自己引用自己(db, monkeypatch) -> None:
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "第一版。")
+    persona.snapshot(db, now=T0)
+    _chat(monkeypatch, "第二版。")
+    calls = _chat(monkeypatch, "第二版。")
+    got = persona.snapshot(db, now=T0 + DAY)
+    assert any("第一版" in p["id"] or "第一版" in p["content"] for p in
+               [{"id": x, "content": x} for x in got.picked]) or \
+        "第一版" in calls[0][0]["content"], "昨晚那版该在今天的输入里"

@@ -123,10 +123,9 @@ def cmd_ghost(args: argparse.Namespace) -> int:
         print("警告：--outbox-file 已废弃，投递搬到 gits shell", file=sys.stderr)
     with _open(args):
         pass                                  # 只为建库/迁移，随后 serve 自己开
-    return _asyncio.run(serve(args.db, node=args.node,
-                              persona_path=args.persona, once=args.once,
+    return _asyncio.run(serve(args.db, node=args.node, once=args.once,
                               persona_apply=(args.persona_apply
-                                              or _flag("GITS_PERSONA_APPLY"))))
+                                             or _flag("GITS_PERSONA_APPLY"))))
 
 
 def cmd_shell(args: argparse.Namespace) -> int:
@@ -352,6 +351,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="JSON：{\"话题\": 权重}，只对 --add 生效")
     pr.set_defaults(fn=cmd_peers)
 
+    sd = sub.add_parser("seed", help="导入初始设定（写成一事件，不是文件）")
+    sd.add_argument("text")
+    sd.add_argument("--actor", default="her")
+    sd.set_defaults(fn=cmd_seed)
+
+    pn = sub.add_parser("persona", help="她现在的自我描述 / 从哪几条来")
+    pn.add_argument("--snapshot", action="store_true", help="现在就重选一次")
+    pn.set_defaults(fn=cmd_persona)
+
+    fn = sub.add_parser("funnel", help="漏斗：该压谁、压到多深")
+    fn.add_argument("--run", type=int, default=0, help="真的压几个")
+    fn.set_defaults(fn=cmd_funnel)
+
     t = sub.add_parser("peer-turn", help="给某个实例跑一个回合（回应或不回应）")
     t.add_argument("actor")
     t.add_argument("--dry-run", action="store_true")
@@ -390,8 +402,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     gh = sub.add_parser("ghost", help="常驻内核（心跳/投递/快照）")
     gh.add_argument("--node", default="cloud")
-    gh.add_argument("--persona", default=None,
-                    help="A 段人格种子文件（最初的版本，之后由 persona 事件接管）")
     gh.add_argument("--persona-apply", action="store_true",
                     help="真的写人格新版本。默认只判定不动作（观察期）")
     gh.add_argument("--outbox-file", default=None, help="投递到文件（没有真通道时）")
@@ -446,6 +456,63 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)
     return p
+
+
+def cmd_seed(args: argparse.Namespace) -> int:
+    from gits.persona import seed
+
+    db = DB(Path(args.db))
+    ev = seed(db, args.text, actor=args.actor)
+    print(f"种下第 {ev} 条事件（scope=self:{args.actor}）")
+    print("  —— 它现在是一条普通记忆：会衰减，会被顶掉，也会被压进摘要。")
+    return 0
+
+
+def cmd_persona(args: argparse.Namespace) -> int:
+    from gits import persona
+
+    db = DB(Path(args.db))
+    if args.snapshot:
+        got = persona.snapshot(db)
+        if got is None:
+            print("没有可选的自我域节点——先 gits seed")
+            return 1
+        print(f"新的一版：{len(got.picked)} 个节点 → 事件 {got.event_id}")
+    cur = persona.current(db)
+    if cur is None:
+        print("还没有自我描述（A 段是空的，她不会说话）")
+        return 0
+    print(f"v{cur['version']}（事件 {cur['event_id']}）")
+    print(cur["narrative"])
+    cands = persona.candidates(db, now=now_ms())
+    print(f"\n现在能想起来 {len(cands)} 条自我域记忆：")
+    for c in cands[:persona.SLOTS]:
+        print(f"  r={c['r']:.2f} depth={c['depth']}  {c['content'][:40]}")
+    return 0
+
+
+def cmd_funnel(args: argparse.Namespace) -> int:
+    from gits import funnel
+
+    db = DB(Path(args.db))
+    t = now_ms()
+    hist = funnel.depth_histogram(db)
+    print("深度分布：" + ("  ".join(f"{d}:{n}" for d, n in sorted(hist.items()))
+                          or "（空）"))
+    if len(hist) > 1:
+        levels = [hist[d] for d in sorted(hist)]
+        mono = all(a >= b for a, b in zip(levels, levels[1:]))
+        print("  " + ("递减 ✓ 是漏斗" if mono else "不递减 ✗ 只是摘要堆"))
+    jobs = funnel.plan(db, now=t)
+    print(f"\n该压的：{len(jobs)}")
+    for name, why in jobs:
+        print(f"  {name}  （{why}）")
+    if args.run:
+        got = funnel.run(db, now=t, limit=args.run)
+        for g in got:
+            print(f"  压了 {g.entity}：{g.children} 条 → {g.summary[:30]}"
+                  f"（压缩比 {g.ratio}）")
+    return 0
 
 
 def cmd_peers(args: argparse.Namespace) -> int:

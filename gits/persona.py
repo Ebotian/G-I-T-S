@@ -1,14 +1,25 @@
-"""人格：一版一版地长，不回退。
+"""人格：夜里从自我域的节点里**选**出来的一段，不是一份文件。
 
-三条规矩，都是为了防两种退化——一个怎么都不变（死），一个每句话都变（没有自我）：
+以前的 persona.md 是唯一一个不在日志里的真相，它有三个特权：不进 restore、
+不衰减、不被 supersede。于是"初始设定"永远站在底座上，而记忆在上面流动——
+**地位不平等。**
 
-  **必须能给依据**  每处改动挂 event_id。挂不上 = 整次作废。
-  **变化必须有界**  一次最多改 60 个字。改多了不叫变化，叫换人。
-  **允许不变**      `keep: true` 应该是最常见的输出。
+现在：
 
-为什么**不做回退**：需要回退，说明我们不信任写入机制；有按钮就敢乱写。
-不回退 ≠ 不记录——版本链是 append-only 的，「她为什么变成这样」一年后还得答得上。
-这跟 `redactions`（把不该存在的话撤掉）是两件事，别混。
+```
+self:her 域里的节点   →  夜里一次选择（同一套打分） →  A 段快照（一条事件）
+  ├ 初始设定（seed）                                    ↓
+  ├ 独白                                          整天的缓存前缀
+  └ 上一版快照  ← 也在这里                        （一天只换一次）
+```
+
+两个后果，都是设计目的：
+
+  **能忘**  长期没被碰过的节点 r 掉下去，就不再被选中
+  **能改**  后来的内容通过版本链顶掉它，走的是和别的记忆同一条路
+
+稳定性不靠特权，靠自反：昨晚那版快照本身是 self 域的一个节点，而且刚被用过，
+所以 s 高、容易被再次选中。**自反 → 稳定**，不是**特殊 → 稳定**。
 """
 
 from __future__ import annotations
@@ -16,150 +27,140 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from gits.context import PersonaSeed
 from gits.db import DB, Writer, now_ms
+from gits.fsrs import DAY, retrievability
 from gits.llm import Reply, chat, cost_cny
 from gits.scope import self_of
 
-#: 一次最多改多少字。超了就当模型在重写。
-MAX_CHARS = 60
-#: 一晚至少要看到这么多条新事件才值得更新
-MIN_EVIDENCE = 3
+#: A 段最多放几条自我域节点。**这就是漏斗底部的容量**——
+#: 上下文有限，我们都放进去了模型就没地方看别的了。
+SLOTS = 8
+#: 选中的节点里，r 低于这个值的不进 A 段（想不起来了就别写进去）
+ALIVE = 0.35
 
-PROMPT = """这是你现在的自我描述：
+PROMPT = """下面是你此刻想得起来的、关于你自己的一些事（按重要程度排）：
 
-{narrative}
+{items}
 
-下面是最近发生过的事（每条前面是事件编号）：
-
-{evidence}
-
-如果这些事真的改变了你看待自己或对待他的方式，就改一两句；
-如果没有，就原样保留。**大部分日子不该有变化。**
-
-只输出 JSON：
-{{"keep": true/false,
- "changes": [{{"old": "原句逐字", "new": "新句", "because": [事件编号]}}]}}
+把它们写成一段第一人称的自我描述，三到五句，不要分点，不要列表。
 
 规则：
-- old 必须是上面那段自我描述里**逐字存在**的一句。
-- 一次最多改 {max_chars} 个字。
-- 没有真正的变化就 keep=true、changes 留空。这很正常。
+- 只写上面出现过的。不要补充，不要美化。
+- 如果它们彼此矛盾，挑你更相信的那个写。
+- 不要写"我是一个 AI"之类的话。
 """
 
 
 @dataclass(frozen=True)
-class Version:
+class Snapshot:
     event_id: int
     narrative: str
-    version: int
+    picked: tuple[str, ...]      # 用了哪几个节点——"她为什么是这样"要能查
+    cost: float = 0.0
 
 
-@dataclass
-class Changed:
-    event_id: int
-    keep: bool
-    changes: int
-    narrative: str
-    cost: float
+def seed(db: DB, text: str, *, actor: str = "her",
+         now: int | None = None) -> int:
+    """把初始设定写成一条**普通事件**。写完就没有文件了。
+
+它和后来的独白用同一个 kind、同一张表、同一条重放路径，只是 source 不同，
+用来回答"这句最初是谁说的"。
+    """
+    now = now or now_ms()
+    ev, _ = Writer(db).append_event(
+        source="seed", kind="seed", ext_id=f"seed-{actor}-{now}",
+        ts=now, recv_ts=now, scope=self_of(actor), payload=text.encode())
+    return ev
 
 
-def latest(db: DB, *, actor: str = "her") -> Version | None:
+def candidates(db: DB, *, actor: str = "her", now: int) -> list[dict]:
+    """自我域里还活着的东西，按 r × 是否被反复提起排序。
+
+和检索走同一套打分——**没有任何"这是人格所以要保护"的分支**。
+    """
+    out = []
+    for r in db.q(
+            "SELECT n.id, n.kind, n.s, n.last_touch, n.depth, c.content"
+            " FROM nodes n JOIN node_content c ON c.node_id=n.id"
+            " WHERE n.scope=? AND c.absorbed_into IS NULL"
+            " AND c.superseded_by IS NULL"
+            " AND c.id = (SELECT max(id) FROM node_content"
+            "             WHERE node_id=n.id)", (self_of(actor),)):
+        if r["last_touch"] is None or not r["s"]:
+            continue
+        elapsed = max(0.0, (now - int(r["last_touch"])) / DAY)
+        rr = retrievability(elapsed, float(r["s"]))
+        if rr < ALIVE:
+            continue
+        out.append({"id": str(r["id"]), "content": str(r["content"]),
+                    "r": rr, "depth": int(r["depth"])})
+    out.sort(key=lambda x: (-x["r"], -x["depth"]))
+    return out
+
+
+def current(db: DB, *, actor: str = "her") -> dict | None:
+    """最近一版自我描述。**没有快照时，种子就是第一版。**
+
+    这样冷启动不需要一次模型调用，也不需要文件——种子本来就是一段叙事。
+    """
     row = db.one(
         "SELECT id, payload FROM events WHERE kind='persona' AND scope=?"
         " ORDER BY id DESC LIMIT 1", (self_of(actor),))
+    if row is None:
+        seed_row = db.one(
+            "SELECT id, payload FROM events WHERE kind='seed' AND scope=?"
+            " ORDER BY id DESC LIMIT 1", (self_of(actor),))
+        if seed_row is None:
+            return None
+        return {"event_id": int(seed_row["id"]),
+                "narrative": (seed_row["payload"] or b"").decode("utf-8", "replace"),
+                "version": 0}
     if row is None:
         return None
     try:
         obj = json.loads(row["payload"] or b"{}")
     except json.JSONDecodeError:
         return None
-    return Version(event_id=int(row["id"]),
-                   narrative=str(obj.get("narrative", "")),
-                   version=int(obj.get("version", 0)))
+    return {"event_id": int(row["id"]),
+            "narrative": str(obj.get("narrative", "")),
+            "version": int(obj.get("version", 0))}
 
 
-def seed(db: DB, *, actor: str = "her", fallback: str = "") -> PersonaSeed:
-    v = latest(db, actor=actor)
-    if v is None:
-        return PersonaSeed(narrative=fallback, version=0)
-    return PersonaSeed(narrative=v.narrative, version=v.version)
-
-
-def evidence(db: DB, *, actor: str, since_id: int, limit: int = 40) -> list[tuple[int, str]]:
-    from gits.scope import visible
-
-    vis = visible(actor)
-    rows = db.q(
-        "SELECT id, payload FROM events WHERE kind IN ('msg_in','msg_out','inner')"
-        " AND scope IN (%s) AND id > ? ORDER BY id DESC LIMIT ?"
-        % ",".join("?" * len(vis)), (*vis, since_id, limit))
-    return [(int(r["id"]), (r["payload"] or b"").decode("utf-8", "replace"))
-            for r in reversed(rows)]
-
-
-def validate(obj: dict, *, base: str, known: set[int]) -> list[dict]:
-    """三道门。任何一道不过，就整次作废——不是"改小一点再试"。"""
-    changes = obj.get("changes") or []
-    if not changes:
-        return []
-    if sum(len(str(c.get("new", ""))) - len(str(c.get("old", "")))
-           for c in changes) > MAX_CHARS:
-        raise ValueError(f"一次改太多（上限 {MAX_CHARS} 字），这是在重写")
-    out = []
-    for c in changes:
-        old, new = str(c.get("old", "")), str(c.get("new", ""))
-        if not old or old not in base:
-            raise ValueError(f"old 不是原文里逐字存在的一句：{old[:20]!r}")
-        refs = [int(x) for x in (c.get("because") or []) if str(x).isdigit()]
-        if not refs:
-            raise ValueError("改动没有依据（because 是空的）")
-        missing = [r for r in refs if r not in known]
-        if missing:
-            raise ValueError(f"依据的事件不存在：{missing}")
-        out.append({"old": old, "new": new, "because": refs})
-    return out
-
-
-def update(db: DB, *, actor: str = "her", now: int | None = None,
-           fallback: str = "", model: str = "deepseek-flash") -> Changed | None:
-    """夜里跑一次。**没有新经历就不调用模型**——从空气里写自我描述是种病。"""
+def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
+             model: str = "deepseek-flash") -> Snapshot | None:
+    """夜里跑一次。**没有可选的节点就什么都不做**——不从空气里写自我描述。"""
     now = now or now_ms()
-    cur = latest(db, actor=actor)
-    base = cur.narrative if cur else fallback
-    since = cur.event_id if cur else 0
-    ev = evidence(db, actor=actor, since_id=since)
-    if len(ev) < MIN_EVIDENCE:
+    picked = candidates(db, actor=actor, now=now)[:SLOTS]
+    if not picked:
         return None
 
-    text = "\n".join(f"[{i}] {t}" for i, t in ev)
+    prev = current(db, actor=actor)
+    version = (prev["version"] + 1) if prev else 0
+    if prev and prev["narrative"]:
+        # 上一版也在候选里（它是 self 域的一个节点），但保险起见补一句，
+        # 免得"自反"这条链在重建时断掉。
+        picked = picked + [{"id": f"persona(v{prev['version']})",
+                            "content": prev["narrative"], "r": 1.0, "depth": 99}]
+
+    items = "\n".join(f"- {p['content']}" for p in picked)
     reply: Reply = chat(
-        [{"role": "user", "content": PROMPT.format(
-            narrative=base, evidence=text, max_chars=MAX_CHARS)}],
-        model=model, max_tokens=1500, temperature=0.2,
-        thinking=True, effort="high")            # 后台活，该想多深想多深
+        [{"role": "user", "content": PROMPT.replace("{items}", items)}],
+        model=model, max_tokens=800, temperature=0.4,
+        thinking=True, effort="high")
 
-    raw = reply.text
-    try:
-        obj = json.loads(raw[raw.index("{"): raw.rindex("}") + 1])
-        changes = validate(obj, base=base, known={i for i, _ in ev})
-    except (ValueError, json.JSONDecodeError) as exc:
-        Writer(db).append_model_call(kind="persona_failed", model=reply.model,
-                                     response=raw, usage_json=str(reply.usage), ts=now)
-        raise ValueError(f"{exc}；原始输出已留档") from exc
+    narrative = reply.text.strip()
+    if not narrative:
+        return None
 
-    narrative = base
-    for c in changes:
-        narrative = narrative.replace(c["old"], c["new"], 1)
-    version = (cur.version if cur else 0) + (1 if changes else 0)
-
-    ev_id, _ = Writer(db).append_event(
+    ev, _ = Writer(db).append_event(
         source="ghost", kind="persona", ext_id=f"persona-v{version}-{now}",
         ts=now, recv_ts=now, scope=self_of(actor),
         payload=json.dumps({"narrative": narrative, "version": version,
-                            "changes": changes, "keep": not changes},
+                            "picked": [p["id"] for p in picked]},
                            ensure_ascii=False).encode())
-    Writer(db).append_model_call(kind="persona", model=reply.model, response=raw,
-                                 event_id=ev_id, usage_json=str(reply.usage), ts=now)
-    return Changed(event_id=ev_id, keep=not changes, changes=len(changes),
-                   narrative=narrative, cost=cost_cny(reply.usage))
+    Writer(db).append_model_call(kind="persona", model=reply.model,
+                                 response=narrative, event_id=ev,
+                                 usage_json=str(reply.usage), ts=now)
+    return Snapshot(event_id=ev, narrative=narrative,
+                    picked=tuple(p["id"] for p in picked),
+                    cost=cost_cny(reply.usage))
