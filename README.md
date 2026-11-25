@@ -67,6 +67,7 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/stats-libs.md`](docs/research/stats-libs.md) — 统计库用哪个、不用哪个、**在哪一层用**（ECS 实测 import 耗时与 RSS）
 - [`docs/research/multi-node.md`](docs/research/multi-node.md) — 多端调度：频率 × 硬件 × 同步节律；依赖预算与 per-node 安装
 - [`docs/research/sync.md`](docs/research/sync.md) — 分层同步：人格秒级、真相按计算需求、投影不传、大产物只传身份
+- [`docs/research/funnel.md`](docs/research/funnel.md) — 记忆漏斗：容量是形状，复现是动力
 - [`docs/research/peers.md`](docs/research/peers.md) — 三个实例：差异的物质基础（机制，不含内容）
 - [`docs/research/loop.md`](docs/research/loop.md) — 从一条微信到她回话：链路、实测、三个还没做对的
 - [`docs/research/weixin.md`](docs/research/weixin.md) — 微信 iLink Bot 通道：协议、四个只有真跑才暴露的坑

@@ -50,8 +50,8 @@ def _age(ms: int) -> str:
 def latest_content(db: DB, node_id: str):
     """最新版本的 (content, id, superseded_by, created_ts)。"""
     return db.one(
-        "SELECT id, content, superseded_by, created_ts FROM node_content"
-        " WHERE node_id=? ORDER BY id DESC LIMIT 1", (node_id,))
+        "SELECT id, content, superseded_by, absorbed_into, created_ts"
+        " FROM node_content WHERE node_id=? ORDER BY id DESC LIMIT 1", (node_id,))
 
 
 def is_alive(db: DB, node_id: str) -> bool:
@@ -96,7 +96,11 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
     out: list[Recalled] = []
     for h in hits:
         row = latest_content(db, h.node_id)
+        # 被推翻的（改了口的）和**被吸收的**（压进摘要的）都进不了检索。
+        # 后者是漏斗的本意：不可检索，但还查得到。见 docs/research/funnel.md。
         if row is None or row["superseded_by"] is not None:
+            continue
+        if row["absorbed_into"] is not None:
             continue
         out.append(Recalled(
             node_id=h.node_id, score=h.score, sim=h.sim,

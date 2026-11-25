@@ -165,6 +165,26 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "funnel":
+        # 漏斗压出来的抽象。**它自己也是一个节点**——会衰减、会被再压缩。
+        # 不可检索的是它的原件，不是它。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            obj = {"summary": response, "depth": 1}
+        nid = node_id_for("funnel", f"{obj.get('entity')}:{obj.get('depth')}:{row['ts']}")
+        conn.execute(
+            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch, depth)"
+            " VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+            (nid, "abstract", row["ts"], "world", 30.0, 1.0, row["ts"],
+             int(obj.get("depth", 1))))
+        conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                     " VALUES(?,?,?)",
+                     (nid, str(obj.get("summary", "")).strip(), row["ts"]))
+        for child in obj.get("children") or []:
+            conn.execute("UPDATE node_content SET absorbed_into=? WHERE node_id=?"
+                         " AND absorbed_into IS NULL", (nid, child))
+        return
     if row["kind"] == "persona":
         # 人格版本：一条事件 = 一版自我描述。append-only，不回退。
         try:
@@ -223,7 +243,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
     }
 
     sql = ("SELECT * FROM events WHERE kind IN"
-           " ('msg_in','inner','consolidate','persona')")
+           " ('msg_in','inner','consolidate','persona','funnel')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -242,7 +262,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
                 continue
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
-                        if row["kind"] in ("consolidate", "persona")
+                        if row["kind"] in ("consolidate", "persona", "funnel")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(
