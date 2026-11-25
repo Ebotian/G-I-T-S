@@ -90,6 +90,7 @@ rituals(id INTEGER PRIMARY KEY, ts_start INTEGER, ts_end INTEGER, kind TEXT,
 outbox(id INTEGER PRIMARY KEY, ts INTEGER, channel TEXT, text TEXT,
        status TEXT, meta TEXT);
 -- status: pending | sent | swallowed | failed | dropped
+-- channel: desk_audio | wechat_voice | wechat_text | mumble(可选)   ← §5.6 的阶梯
 
 -- 世界怎么回应（§3.2）：她能学习的唯一途径
 outcomes(id INTEGER PRIMARY KEY, outbox_id INTEGER, ts INTEGER, kind TEXT, ref_event_id INTEGER);

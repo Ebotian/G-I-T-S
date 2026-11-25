@@ -66,7 +66,7 @@
 | 分词 | **jieba** | — | 中文 FTS5 的必需品 |
 | 调度 | **asyncio + 五分钟 tick** | APScheduler / Celery | 我们要的是"按节律评估"，不是 cron |
 | 进程管理 | **systemd** | docker / k8s | 1.6 G 上给容器预留内存是浪费 |
-| Mumble | **pymumble**（GPL-3.0） | 自己实现协议 | 但**已停止维护**，见 §5 |
+| Mumble | **pymumble**（GPL-3.0，可选） | 自己实现协议 | **不在关键路径上**（§5）。出声用 `pw-play` 就够 |
 | 向量 | **sqlite-vec**（<1.0） | 起一个向量库 | 先不建，等 embedding 跑通（schema §4） |
 | 测试 | **pytest** | — | 核心是重放测试 |
 
@@ -123,11 +123,11 @@ SQLite 的并发模型是"多读单写"。做法不是加锁，而是**结构上
 | **Hindsight** | 后台/积压的状态模型（§15.7） | 我们只要那个"未处理是可报告状态"的思路，不接它的服务 |
 | **nocturne_memory** | 版本链（Node/Memory 分离）、changeset 审计 | 不接它的 MCP 交互模式（§12.1） |
 | **revive-companion** | 三阶段分解、`reason` 字符串、`0.85^n` 衰减 | 不装它的包；它的"信息增益"是手写标量（§12.3） |
-| **pymumble** | 整个 Mumble 客户端 | ⚠️ **GPL-3.0**（与 AGPL-3.0 兼容），但 **Snyk 记录其已 12 个月无新版、维护不活跃**。→ 隔离在 `channels/mumble.py` 一个文件里，出问题就换本地播放 |
+| **pymumble**（可选） | Mumble 客户端 | ⚠️ **GPL-3.0**（与 AGPL-3.0 兼容），但 **Snyk 记录其已 12 个月无新版、维护不活跃**。→ 既然出声直接走本机播放，**默认不装**；将来需要多听众再隔离进 `channels/mumble.py` |
 | **sqlite-vec** | FTS5 之外的向量召回 | **<1.0**，pre-release。→ 先不引入，等 embedding 跑通再决定 |
 | **AstrBot / OpenClaw** | 无 | 两者都自带 agent 循环，会与 §10.3-2 冲突 |
 
-**P4 的降级路径**：第一阶段"低语"**不需要 Mumble**。`shell@office` 收到音频后直接 `paplay` 到本地 PipeWire 就行。Mumble 是为了"多个听众"和"不在桌边"才需要的。先用最简单的，别让一个 GPL 的停滞库卡住整条链路。
+**P4 不需要 Mumble，这不是降级路径，是默认路径。** `shell@office` 收到音频直接 `pw-play` 到当前默认 sink。Mumble 只为"多个听众"和"你不在桌边但 PC 还开着"存在，将来需要再说。别让一个 GPL 的停滞库卡住整条链路。
 
 ---
 
