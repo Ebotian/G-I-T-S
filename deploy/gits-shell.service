@@ -8,20 +8,20 @@ Type=notify
 NotifyAccess=main
 WatchdogSec=180
 Restart=always
-RestartSec=2
+RestartSec=3
 
-# 实例的身份：非 root、不能登录
 User=gits
 Group=gits
+# 工作目录是只读的运行目录：**所有写入都必须显式指向 /var/lib/gits**。
+# 上一版忘了这一点，FileChannel 去建相对路径 var/ ，撞上 Read-only file system。
 WorkingDirectory=/srv/gits-runtime
 
-EnvironmentFile=/etc/gits.env
 ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
     --db /var/lib/gits/gits.db shell \
+    --out /var/lib/gits/outbox.jsonl \
+    --inbox /var/lib/gits/inbox.jsonl \
     --weixin-state /var/lib/gits/weixin.json --node cloud
 
-# 三层隔离的后两层：即使文件权限被改松，这一步也挡住。
-# 实例跑的是 /srv/gits-runtime 里的一份代码拷贝，不需要仓库。
 InaccessiblePaths=/srv/gits
 ProtectSystem=strict
 ProtectHome=yes
