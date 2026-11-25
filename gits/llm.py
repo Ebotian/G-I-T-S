@@ -42,8 +42,13 @@ def _key() -> str:
 
 def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 300,
          temperature: float = 1.0, safety_check: bool = False,
-         timeout: float = 60.0) -> Reply:
-    """一次非流式调用。流式等有真需求再加——现在首字延迟不是瓶颈。"""
+         thinking: bool = False, timeout: float = 60.0) -> Reply:
+    """一次非流式调用。
+
+    thinking 必须显式关掉。DeepSeek 默认是思考模式：实测 max_tokens=40 时，
+    40 个 completion token 全部进了 reasoning_tokens，可见回答是空字符串——
+    调用成功、花掉钱、什么都没说。她说话不该先想 40 个字。
+    """
     body: dict = {
         "model": model,
         "messages": messages,
@@ -51,6 +56,7 @@ def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 
         "temperature": temperature,
         "stream": False,
     }
+    body["thinking"] = {"type": "enabled" if thinking else "disabled"}
     if safety_check:
         body["safety_check"] = {"level": "high"}
 

@@ -76,7 +76,7 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     reply = chat(
         [{"role": "system", "content": prompt.text},
          {"role": "user", "content": text}],
-        model=model, max_tokens=max_tokens,
+        model=model, max_tokens=max_tokens, thinking=False,
     )
 
     call_id = Writer(db).append_model_call(
