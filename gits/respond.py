@@ -123,7 +123,10 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     snap = relation(db, now=now)
     hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)
-    ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits))
+    from gits.facts import lines as fact_lines
+
+    ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
+                      due=fact_lines(db, now))
     prompt = assemble(seed, snap, ctx)
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())

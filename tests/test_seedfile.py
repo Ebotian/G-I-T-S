@@ -91,6 +91,47 @@ def test_示例包默认拒收(db) -> None:
     assert "示例包" in seedfile.describe(b)
 
 
+def test_事实能过校验(db) -> None:
+    doc = json.loads(_doc())
+    doc["facts"] = [{"subject": "him", "key": "birthday",
+                     "label": "他的生日", "month": 3, "day": 12,
+                     "lead_days": 3}]
+    b = seedfile.parse(json.dumps(doc, ensure_ascii=False))
+    assert len(b.facts) == 1 and b.facts[0].lead_days == 3
+    out = seedfile.describe(b)
+    assert "他的生日" not in out, "标签也是内容"
+    assert "固定事实 1 条" in out
+
+
+@pytest.mark.parametrize("fact,msg", [
+    ({"month": 2, "day": 30}, "不是合法日期"),
+    ({"month": 13}, "month"),
+    ({"lead_days": 99}, "lead_days"),
+    ({"repeat": "weekly"}, "repeat"),
+    ({"calendar": "lunar"}, "只有 solar"),
+    ({"label": ""}, "label"),
+    ({"evil": 1}, "未知字段"),
+])
+def test_坏事实整份拒绝(db, fact, msg) -> None:
+    doc = json.loads(_doc())
+    base = {"subject": "him", "key": "birthday", "label": "生日",
+            "month": 3, "day": 12}
+    base.update(fact)
+    doc["facts"] = [base]
+    with pytest.raises(seedfile.Bad, match=msg):
+        seedfile.parse(json.dumps(doc, ensure_ascii=False))
+
+
+def test_导入会写出事实(db) -> None:
+    doc = json.loads(_doc())
+    doc["facts"] = [{"subject": "him", "key": "birthday", "label": "生日",
+                     "month": 3, "day": 12}]
+    counts = seedfile.apply(db, seedfile.parse(json.dumps(doc, ensure_ascii=False)),
+                            now=T0)
+    assert counts["facts"] == 1
+    assert db.scalar("SELECT count(*) FROM facts") == 1
+
+
 def test_模板是无害占位符(db) -> None:
     import pathlib
 

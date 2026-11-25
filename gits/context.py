@@ -61,6 +61,9 @@ class TurnContext:
     #: 额度提示条（§18.6）。**只放在 C 段**——它每花一次就变，
     #: 塞进 A/B 会把缓存前缀打断（50 倍价差）。十几个 token，很便宜。
     quota_hint: str = ""
+    #: 固定事实（生日/纪念日）。**平时是空的**，只在窗口内出现。
+    #: 只给事实不给建议——说什么是她的事，否则我们做的是日历不是同伴。
+    due: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -118,6 +121,9 @@ def render_b(snap: RelationSnapshot) -> str:
 
 def render_c(ctx: TurnContext) -> str:
     parts = []
+    if ctx.due:
+        parts.append("# 日子")
+        parts.extend(ctx.due)
     if ctx.quota_hint:
         parts.append(ctx.quota_hint)
     if ctx.recent:

@@ -1,114 +1,96 @@
-"""验证事实级生成器本身：它得**真的有那些统计规律**。
+"""固定事实：生日这类东西。
 
-和前面一样：生成器不写测试，等于用不可信的东西验证不可信的东西。
-这里每一条都对应"没有它实验就没有区分力"。
+测的重点是**它不该被衰减碰**，以及**它平时不该出现**。
 """
 
 from __future__ import annotations
 
-import collections
-import statistics as st
+import datetime as dt
+from pathlib import Path
 
 import pytest
 
-from synth.facts import DAY, generate
+from gits import facts, project
+from gits.db import DB, Writer
 
-FS = generate(days=90, seed=7)
-
-
-def _counts(fs):
-    return collections.Counter(m.fact for m in fs.mentions)
+DAY = 86_400_000
 
 
-# ── 重尾 ────────────────────────────────────────────────────
-def test_提及次数是重尾的() -> None:
-    vals = sorted(_counts(FS).values(), reverse=True)
-    assert st.pstdev(vals) / st.mean(vals) > 1.2, "CV 太低，等于均匀分布"
-    assert vals[0] > 5 * st.median(vals), "头部不够长"
+@pytest.fixture()
+def db(tmp_path: Path):
+    d = DB(tmp_path / "g.db")
+    yield d
+    d.close()
 
 
-def test_大多数事实只提过一次() -> None:
-    """没有这一条，"频次"这个变量根本不存在。"""
-    vals = list(_counts(FS).values())
-    once = sum(1 for v in vals if v == 1) / len(vals)
-    assert 0.3 < once < 0.85, once
+def _ts(y: int, m: int, d: int) -> int:
+    """某个本地日期的中午，换成毫秒时间戳。"""
+    return int(dt.datetime(y, m, d, 12, tzinfo=dt.timezone(
+        dt.timedelta(hours=facts.TZ_OFFSET_HOURS))).timestamp() * 1000)
 
 
-def test_实体分布也是偏斜的() -> None:
-    per = collections.Counter(f.entity for f in FS.facts)
-    vals = sorted(per.values(), reverse=True)
-    assert vals[0] >= 3 * st.median(vals)
+def test_平时不出现(db) -> None:
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=3, day=12, lead_days=3, now=_ts(2027, 1, 1))
+    assert facts.lines(db, _ts(2027, 1, 1)) == ()
+    assert facts.due(db, _ts(2027, 2, 28)) == []
 
 
-# ── 记忆的真实形状 ──────────────────────────────────────────
-def test_有被取代的旧版本() -> None:
-    n = sum(1 for f in FS.facts if f.superseded_by)
-    assert 5 <= n <= 40, n
+def test_窗口内才出现(db) -> None:
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=3, day=12, lead_days=3, now=_ts(2027, 1, 1))
+    assert facts.lines(db, _ts(2027, 3, 9)) == ("3 天后是他的生日。",)
+    assert facts.lines(db, _ts(2027, 3, 11)) == ("明天是他的生日。",)
+    assert facts.lines(db, _ts(2027, 3, 12)) == ("今天是他的生日。",)
+    assert facts.lines(db, _ts(2027, 3, 13)) == (), "过了就退出去"
 
 
-def test_有换措辞的重复提及() -> None:
-    assert any(m.paraphrase for m in FS.mentions)
+def test_只给事实不给建议(db) -> None:
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=3, day=12, now=_ts(2027, 1, 1))
+    line = facts.lines(db, _ts(2027, 3, 12))[0]
+    for word in ("祝", "应该", "记得", "别忘了"):
+        assert word not in line, f"这是原料，不是脚本：{line}"
 
 
-def test_有说完就没再提过的事实() -> None:
-    """只提过一次的事实要占相当比例——它们才是衰减真正要处理的那些。"""
-    counts = _counts(FS)
-    once = [f for f in FS.facts if counts.get(f.id, 0) == 1]
-    assert len(once) > 20, f"只提过一次的太少（{len(once)}），衰减没东西可区分"
-    # 记下来的事实都是被说过一次的，所以不应该存在"零次"
-    assert all(counts.get(f.id, 0) >= 1 for f in FS.facts)
+def test_不衰减也不进节点(db) -> None:
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=3, day=12, now=_ts(2027, 1, 1))
+    assert db.scalar("SELECT count(*) FROM nodes") == 0, \
+        "事实不是记忆，不该进图——否则 364 天后 r≈0，正好在那天被忘掉"
+    far = _ts(2037, 3, 12)
+    assert facts.lines(db, far) == ("今天是他的生日。",), "十年后照样想得起来"
 
 
-def test_提及都在时间窗内() -> None:
-    assert all(FS.start <= m.ts < FS.end for m in FS.mentions)
+def test_改一条是顶掉不是覆盖(db) -> None:
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=3, day=12, now=_ts(2027, 1, 1))
+    facts.add(db, subject="him", key="birthday", label="他的生日",
+              month=4, day="1" if False else 1, now=_ts(2027, 2, 1))
+    live = db.q("SELECT month FROM facts WHERE superseded_by IS NULL")
+    assert [r["month"] for r in live] == [4]
+    assert db.scalar("SELECT count(*) FROM facts") == 2, "旧的那条还在，只是被顶掉"
 
 
-# ── 查询 ────────────────────────────────────────────────────
-def test_查询是间接说法() -> None:
-    """带上实体名，词面检索就包打天下了，语义召回测不出来。"""
-    names = {e.name for e in FS.entities}
-    for q in FS.queries:
-        assert not any(n in q.text for n in names), q.text
+def test_二月二十九在平年按三月一算(db) -> None:
+    assert facts.days_until(2, 29, dt.date(2026, 3, 1)) == 0
+    assert facts.days_until(2, 29, dt.date(2026, 2, 28)) == 1
 
 
-def test_答案一定在候选里() -> None:
-    for q in FS.queries:
-        assert q.answer in q.candidates
+def test_能重放(db) -> None:
+    ev = facts.add(db, subject="him", key="birthday", label="他的生日",
+                   month=3, day=12, lead_days=3, year=1990,
+                   now=_ts(2027, 1, 1))
+    assert ev > 0
+    project.restore(db)
+    row = db.one("SELECT label, month, day, year, lead_days FROM facts")
+    assert row["month"] == 3 and row["year"] == 1990 and row["lead_days"] == 3
 
 
-def test_候选里没有已过期的旧版本() -> None:
-    """被取代的旧事实如果在取代之后还留着，那就是版本链没生效。"""
-    superseded = {f.id: f.superseded_by for f in FS.facts if f.superseded_by}
-    for q in FS.queries:
-        for cid in q.candidates:
-            if cid in superseded:
-                new_id = superseded[cid]
-                assert not any(m.fact == new_id and m.ts < q.ts
-                               for m in FS.mentions), \
-                    f"候选里混进了已过期版本 {cid}"
-
-
-def test_查询分层同时有两种() -> None:
-    """一种靠"最近"、一种靠"最多"。两者都有，模型才分得出高下。"""
-    kinds = collections.Counter(q.reason for q in FS.queries)
-    assert kinds["recent"] > 20 and kinds["strong"] > 5, kinds
-
-
-def test_最近与最多经常不一致() -> None:
-    """这是整套实验的区分力所在：如果总是同一条，A/B/C 打分一样。"""
-    disagree = sum(1 for q in FS.queries if q.reason == "recent")
-    assert disagree / len(FS.queries) > 0.4
-
-
-# ── 可复现 ──────────────────────────────────────────────────
-def test_同种子必得同数据() -> None:
-    a = generate(days=30, seed=3)
-    b = generate(days=30, seed=3)
-    assert [m.ts for m in a.mentions] == [m.ts for m in b.mentions]
-    assert [f.id for f in a.facts] == [f.id for f in b.facts]
-
-
-def test_换种子换数据() -> None:
-    a = generate(days=30, seed=3)
-    b = generate(days=30, seed=4)
-    assert [m.ts for m in a.mentions] != [m.ts for m in b.mentions]
+def test_一次性事实过了就不再来(db) -> None:
+    facts.add(db, subject="him", key="deadline", label="截止",
+              month=3, day=12, year=2027, repeat="once",
+              lead_days=2, now=_ts(2027, 1, 1))
+    assert facts.lines(db, _ts(2027, 3, 10)) == ("2 天后是截止。",)
+    assert facts.lines(db, _ts(2027, 3, 13)) == ()
+    assert facts.lines(db, _ts(2028, 3, 12)) == (), "once 不该每年重复"

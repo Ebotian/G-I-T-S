@@ -89,6 +89,11 @@ def dump_projection(db: DB) -> Projection:
     )
 
 
+def fact_id(subject: str, key: str, now: int) -> str:
+    """事实事件的稳定身份。**所有版本都算，因为每条版本都要落一次投影。**"""
+    return f"fact-{subject}-{key}-{now}"
+
+
 def entity_id(name: str) -> str:
     """实体的稳定 id。同名同 id——这是跨消息合并的唯一依据。"""
     h = hashlib.sha256(("entity\x00" + name.strip()).encode()).hexdigest()[:16]
@@ -165,6 +170,28 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "fact":
+        # 固定事实：**不是记忆**，所以不进 nodes，也不该被衰减碰。
+        # 改一条 = 再写一条同 (subject, key) 的，旧的标 superseded_by。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            return
+        conn.execute(
+            "UPDATE facts SET superseded_by=0"
+            " WHERE subject=? AND key=? AND superseded_by IS NULL",
+            (obj.get("subject"), obj.get("key")))
+        cur = conn.execute(
+            "INSERT INTO facts(subject, key, label, month, day, year,"
+            " lead_days, repeat, created_ts) VALUES(?,?,?,?,?,?,?,?,?)",
+            (obj.get("subject"), obj.get("key"), str(obj.get("label", "")),
+             int(obj.get("month", 1)), int(obj.get("day", 1)),
+             obj.get("year"), int(obj.get("lead_days", 0)),
+             str(obj.get("repeat", "yearly")), row["ts"]))
+        conn.execute("UPDATE facts SET superseded_by=? WHERE subject=? AND key=?"
+                     " AND superseded_by=0", (int(cur.lastrowid),
+                                              obj.get("subject"), obj.get("key")))
+        return
     if row["kind"] == "seed":
         # 初始设定就是一条普通的自我域记忆——和后来的独白同一个投影路径。
         # **它就是第一版人格**：不需要模型，也不需要文件。
@@ -256,7 +283,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
     }
 
     sql = ("SELECT * FROM events WHERE kind IN"
-           " ('msg_in','inner','consolidate','persona','funnel','seed')")
+           " ('msg_in','inner','consolidate','persona','funnel','seed','fact')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -276,7 +303,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
                         if row["kind"] in ("consolidate", "persona", "funnel",
-                                           "seed")
+                                           "seed", "fact")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(
