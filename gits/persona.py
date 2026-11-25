@@ -103,12 +103,15 @@ def current(db: DB, *, actor: str = "her") -> dict | None:
 
     这样冷启动不需要一次模型调用，也不需要文件——种子本来就是一段叙事。
     """
+    # 被删掉的（redactions）不算——清空之后就真的空了
     row = db.one(
         "SELECT id, payload FROM events WHERE kind='persona' AND scope=?"
+        " AND id NOT IN (SELECT event_id FROM redactions)"
         " ORDER BY id DESC LIMIT 1", (self_of(actor),))
     if row is None:
         seed_row = db.one(
             "SELECT id, payload FROM events WHERE kind='seed' AND scope=?"
+            " AND id NOT IN (SELECT event_id FROM redactions)"
             " ORDER BY id DESC LIMIT 1", (self_of(actor),))
         if seed_row is None:
             return None

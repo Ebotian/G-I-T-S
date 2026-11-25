@@ -39,10 +39,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             "SELECT count(*) FROM events e WHERE e.kind IN ('msg_in','inner')"
             " AND NOT EXISTS (SELECT 1 FROM model_calls m WHERE m.event_id=e.id)"
         ) or 0
+        from gits import persona, wipe
+
+        state = wipe.states(db)
+        a = persona.current(db)
         print(
             f"events={n_events} model_calls={n_calls} nodes={n_nodes} outbox={n_out}\n"
             f"last_event={last['id'] if last else '-'} "
-            f"待抽取(积压)={behind}"
+            f"待抽取(积压)={behind}\n"
+            f"A 段={'空（不会说话）' if a is None else 'v' + str(a['version'])}\n"
+            f"内容={json.dumps(state, ensure_ascii=False) if state else '{}（干净）'}"
         )
         cur = cursor(db, "cloud")
         if cur:
@@ -360,6 +366,11 @@ def build_parser() -> argparse.ArgumentParser:
     pn.add_argument("--snapshot", action="store_true", help="现在就重选一次")
     pn.set_defaults(fn=cmd_persona)
 
+    wp = sub.add_parser("wipe", help="清空内容，保留机制（要 --yes）")
+    wp.add_argument("--yes", action="store_true", help="真的清（否则只报告）")
+    wp.add_argument("--actor", default="her")
+    wp.set_defaults(fn=cmd_wipe)
+
     fn = sub.add_parser("funnel", help="漏斗：该压谁、压到多深")
     fn.add_argument("--run", type=int, default=0, help="真的压几个")
     fn.set_defaults(fn=cmd_funnel)
@@ -456,6 +467,28 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)
     return p
+
+
+def cmd_wipe(args: argparse.Namespace) -> int:
+    from gits import persona, wipe
+
+    db = DB(Path(args.db))
+    before = wipe.states(db, actor=args.actor)
+    print("现在的内容：" + (json.dumps(before, ensure_ascii=False) if before
+                            else "（已经没有内容了）"))
+    if not before:
+        return 0
+    if not args.yes:
+        print("\n只是报告。真要清就加 --yes。")
+        print("注意：清完之后 A 段是空的，她不会回话——这是刻意的。")
+        return 0
+    got = wipe.wipe(db, actor=args.actor)
+    print("\n清掉了：" + json.dumps(got, ensure_ascii=False))
+    print("机制都还在：表、代码、调度、漏斗、漂移。只缺内容。")
+    cur = persona.current(db, actor=args.actor)
+    print("A 段：" + ("空——她不会说话" if cur is None
+                      else repr(cur["narrative"][:40])))
+    return 0
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
