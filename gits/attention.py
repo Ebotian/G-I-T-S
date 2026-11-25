@@ -23,8 +23,10 @@ from gits.db import DB, Writer, now_ms
 BASE_RATE = 0.02
 #: 限速：一天最多漂这么多
 MAX_DAILY = 0.10
-#: 上下界
+#: 上下界（weight 相对锚点的倍数）
 LOW, HIGH = 0.5, 2.0
+#: 锚点自己的取值区间
+WEIGHT_RANGE = (0.1, 5.0)
 #: 无推动时每天朝初始值回归的比例
 REVERT = 0.01
 #: 每对每天最多挪几个话题（多了就不叫"缓慢"了）
@@ -60,7 +62,8 @@ def _clamp(w: float, base: float) -> float:
 
 
 def step(db: DB, *, pair: tuple[str, str], pressure: float = 0.0,
-         now: int | None = None) -> dict[str, dict[str, float]]:
+         now: int | None = None, reestimate_anchors: bool = True,
+         ) -> dict[str, dict[str, float]]:
     """漂一天。`pressure` 是重叠加压（0..1），只影响**幅度**，不影响方向。
 
     返回 {actor: {topic: delta}}，调用方负责记账。**没有这一步就悄悄改变了行为**，
@@ -68,6 +71,11 @@ def step(db: DB, *, pair: tuple[str, str], pressure: float = 0.0,
     """
     now = now or now_ms()
     a, b = pair
+    # 先让锚点跟着真实数据走一步，再谈漂移。
+    # 顺序有意义：锚点决定漂移围绕的**中心**，中心没更新就漂是白漂。
+    if reestimate_anchors:
+        reestimate(db, a, now=now)
+        reestimate(db, b, now=now)
     rate = min(MAX_DAILY, BASE_RATE * (1.0 + 4.0 * max(0.0, pressure)))
     wa, wb = weights(db, a), weights(db, b)
     shared = sorted(set(wa) & set(wb))[:TOPICS_PER_DAY]
@@ -131,3 +139,92 @@ def overlap_pressure(overlap: float | None, *, baseline: float = 0.15,
         return 0.0
     x = (overlap - baseline) / max(1e-9, ceiling - baseline)
     return float(min(1.0, max(0.0, x)))
+
+
+# ── 锚点从数据里估，不是写死的魔法数字 ──────────────────────
+#
+# 种子给的 1.2 只是**初始锚点**。之后每天锚点朝"这个话题最近真的被提到多少次"
+# 挪一点；三个月没人提，它就回到中性 1.0——偏好自己消失。
+#
+# 同时，从没被种过但一直被提到的话题会**自己长出来**：
+# 否则注意力就被冻在种子那一刻，而生活早就换话题了。
+
+OBSERVE_LAMBDA = 0.05     # 每天锚点朝观测值挪多少
+NEUTRAL = 1.0             # 没被提到 = 中性，不是 0（0 会让它永不可能被想起）
+WINDOW_DAYS = 7           # 观测窗口
+MIN_MENTIONS = 3          # 从数据里新建话题的最低门槛
+MAX_TOPICS = 32
+ANCHOR_EPS = 0.01         # 挪动小于这个就不记事件
+
+
+def _mentions(db: DB, *, now: int, window_days: int = WINDOW_DAYS) -> dict[str, int]:
+    """最近窗口里，每个实体被提到的次数。用 mentions 边，不碰向量。"""
+    since = now - window_days * 86_400_000
+    rows = db.q(
+        "SELECT c.content AS name, count(*) AS n FROM edges e"
+        " JOIN nodes d ON d.id = e.dst AND d.kind = 'entity'"
+        " JOIN node_content c ON c.id ="
+        "   (SELECT max(id) FROM node_content WHERE node_id = d.id)"
+        " WHERE e.kind = 'mentions' AND e.t_created > ?"
+        " GROUP BY c.content", (since,))
+    return {str(r["name"]): int(r["n"]) for r in rows}
+
+
+def _target(n: int, avg: float) -> float:
+    """提到次数 -> 目标锚点。没提到就是中性 1.0。"""
+    if n <= 0:
+        return NEUTRAL
+    lo, hi = WEIGHT_RANGE
+    return float(min(hi, max(lo, 1.0 + 2.0 * (n / max(1e-9, avg) - 1.0))))
+
+
+def reestimate(db: DB, actor: str, *, now: int) -> dict[str, float]:
+    """把锚点朝观测值挪一步。返回变动量（只含挪动过的）。"""
+    counts = _mentions(db, now=now)
+    rows = db.q("SELECT topic, weight, base_weight FROM attention WHERE actor_id=?",
+                (actor,))
+    if not rows and not counts:
+        return {}
+
+    live = {str(r["topic"]): (float(r["weight"]), float(r["base_weight"]))
+            for r in rows}
+    # 平均值只在"确实被提到过"的话题上算，免得一堆 0 把它稀释成什么都看不见
+    observed = [counts[t] for t in live if counts.get(t, 0) > 0]
+    if not observed:
+        observed = [c for c in counts.values() if c > 0]
+    avg = max(1.0, sum(observed) / len(observed)) if observed else 1.0
+
+    moved: dict[str, float] = {}
+    with Writer(db).txn() as c:
+        for topic, (w, base) in live.items():
+            tgt = _target(counts.get(topic, 0), avg)
+            new_base = round(base + OBSERVE_LAMBDA * (tgt - base), 6)
+            # **一直挪，别在快到的时候停下。**早先写成"步子小于 0.01 就不动"，
+            # 结果锚点永远停在 1.19 回不到 1.0——指数衰减的尾巴正好落在阈值上。
+            # 阈值只用来决定"值不值得记一条事件"。
+            c.execute("UPDATE attention SET base_weight=?, updated_ts=?"
+                      " WHERE actor_id=? AND topic=?", (new_base, now, actor, topic))
+            if abs(new_base - base) >= ANCHOR_EPS:
+                moved[topic] = round(new_base - base, 6)
+
+        # 从没种过、但一直被提到的话题：自己长出来
+        fresh = [(t, n) for t, n in counts.items()
+                 if t not in live and n >= MIN_MENTIONS]
+        fresh.sort(key=lambda kv: -kv[1])
+        for topic, n in fresh:
+            if len(live) + len(moved) + len(fresh) > MAX_TOPICS:
+                break
+            tgt = _target(n, avg)
+            c.execute(
+                "INSERT INTO attention(actor_id, topic, weight, base_weight,"
+                " updated_ts) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(actor_id, topic) DO NOTHING",
+                (actor, topic, tgt, tgt, now))
+            moved[topic] = round(tgt - 0.0, 6)
+
+    if moved:
+        Writer(db).append_event(
+            source="attention", kind="anchor", ext_id=f"anchor-{actor}-{now}",
+            ts=now, recv_ts=now, scope=f"self:{actor}",
+            payload=json.dumps({"delta": moved}, ensure_ascii=False).encode())
+    return moved

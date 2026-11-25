@@ -22,6 +22,7 @@ from gits.scope import self_of
 
 T0 = 1_800_000_000_000
 HOUR = 3_600_000
+DAY = 24 * HOUR
 
 
 @pytest.fixture()
@@ -235,3 +236,80 @@ def test_重合率越高施压越大(db) -> None:
     ov = P.overlap(db, "peer1", "peer2")
     assert ov is not None and ov > 0.9, "几乎一模一样"
     assert attention.overlap_pressure(ov) == 1.0
+
+
+# ── 锚点从数据里估：种子只是初始值，不是永久偏置 ─────────────
+
+
+def _mention(db: DB, actor: str, topic: str, ts: int, n: int = 1) -> None:
+    """造一条"提到了这个话题"的事实，用来喂观测。"""
+    from gits.project import entity_id
+
+    nid = f"n:test-{topic}-{ts}"
+    eid = entity_id(topic)
+    with Writer(db).txn() as c:
+        c.execute("INSERT INTO nodes(id, kind, born_ts, scope) VALUES(?,?,?,?)"
+                  " ON CONFLICT(id) DO NOTHING", (nid, "episode", ts, "world"))
+        c.execute("INSERT INTO nodes(id, kind, born_ts, scope) VALUES(?,?,?,?)"
+                  " ON CONFLICT(id) DO NOTHING", (eid, "entity", ts, "world"))
+        c.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                  " VALUES(?,?,?)", (eid, topic, ts))
+        for i in range(n):
+            c.execute("INSERT INTO edges(src, dst, w, kind, t_created, last_coact)"
+                      " VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+                      (f"{nid}-{i}", eid, 1.0, "mentions", ts, ts))
+
+
+def test_没人提的话题_锚点自己回到中性(db) -> None:
+    attention.seed(db, "her", {"开会": 2.0}, ts=T0)
+    for day in range(1, 200):
+        attention.reestimate(db, "her", now=T0 + day * DAY)
+    row = db.one("SELECT base_weight FROM attention WHERE actor_id='her'"
+                 " AND topic='开会'")
+    assert row["base_weight"] == pytest.approx(1.0, abs=0.02), \
+        "三个月没人提，种子偏好不该还站在那儿"
+
+
+def test_一直被提的话题_锚点升上去(db) -> None:
+    # 相对量：同样的天数里，"开会"被提到的次数远多于"天气"
+    attention.seed(db, "her", {"开会": 1.0, "天气": 1.0}, ts=T0)
+    for day in range(1, 40):
+        _mention(db, "her", "开会", T0 + day * DAY, n=5)
+        _mention(db, "her", "天气", T0 + day * DAY, n=1)
+        attention.reestimate(db, "her", now=T0 + day * DAY)
+    hi = db.scalar("SELECT base_weight FROM attention WHERE actor_id='her'"
+                   " AND topic='开会'")
+    lo = db.scalar("SELECT base_weight FROM attention WHERE actor_id='her'"
+                   " AND topic='天气'")
+    assert hi > 1.5 and lo < hi - 0.5, "锚点是相对的：谁被提得多，谁排前面"
+
+
+def test_没种过但一直提的话题自己长出来(db) -> None:
+    for day in range(1, 4):
+        _mention(db, "her", "搬家", T0 + day * DAY, n=3)
+    attention.reestimate(db, "her", now=T0 + 4 * DAY)
+    got = attention.weights(db, "her")
+    assert "搬家" in got, "注意力不该冻在种子那一刻"
+
+
+def test_偶尔提一次不会长出新话题(db) -> None:
+    _mention(db, "her", "一嘴带过", T0, n=1)
+    attention.reestimate(db, "her", now=T0 + DAY)
+    assert "一嘴带过" not in attention.weights(db, "her")
+
+
+def test_锚点变动本身是事件(db) -> None:
+    attention.seed(db, "her", {"开会": 2.0}, ts=T0)
+    attention.reestimate(db, "her", now=T0 + DAY)
+    ev = db.one("SELECT scope, payload FROM events WHERE kind='anchor'")
+    assert ev is not None and ev["scope"] == "self:her"
+    assert "开会" in ev["payload"].decode()
+
+
+def test_漂移围绕新的锚点走(db) -> None:
+    attention.seed(db, "peer1", {"开会": 2.0}, ts=T0)
+    attention.seed(db, "peer2", {"开会": 2.0}, ts=T0)
+    before = db.scalar("SELECT base_weight FROM attention WHERE actor_id='peer1'")
+    attention.step(db, pair=("peer1", "peer2"), now=T0 + DAY)
+    after = db.scalar("SELECT base_weight FROM attention WHERE actor_id='peer1'")
+    assert after < before, "step 里先估锚点，锚点朝中性挪了"
