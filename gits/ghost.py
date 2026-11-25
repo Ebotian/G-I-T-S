@@ -90,6 +90,9 @@ class Ghost:
     #: 心跳间隔。取 5 分钟的倍数，是因为"她还活着"不需要秒级精度，
     #: 而事件表要能被 replay 得动。
     heartbeat_ms: int = 5 * 60_000
+    #: 落**事件**的间隔。心跳本身每 5 分钟一拍，但只更新 nodes_health；
+    #: 事件按小时写，否则一年十万条"我还活着"会把真相淹掉。
+    event_beat_ms: int = 60 * 60_000
     #: 快照/重建索引间隔
     snapshot_ms: int = 15 * 60_000
     _last_beat: int = 0
@@ -101,19 +104,32 @@ class Ghost:
 
     # ── 心跳 ──
     def beat(self, t: int | None = None) -> bool:
+        """一拍两件事：更新 liveness，**按小时**落一条事件。
+
+        为什么不把每一拍都写成事件：5 分钟一次就是 288 条/天、10 万条/年，
+        全是"我还活着"。它会把 events 淹掉——而 events 是唯一真相，
+        要留着放真正发生过的事。
+
+        所以：nodes_health 记每一拍（廉价 upsert，不留历史），
+        events 每小时一条（够"她当时在不在"用了）。
+        """
         t = now_ms() if t is None else t
-        bucket = t // self.heartbeat_ms
+        with self.w.txn() as c:
+            c.execute(
+                "INSERT INTO nodes_health(node_id, last_seen, caps, idle_since)"
+                " VALUES(?,?,?,NULL) ON CONFLICT(node_id) DO UPDATE SET"
+                " last_seen=excluded.last_seen",
+                (self.node, t, "ghost"))
+        self._last_beat = t
+
+        bucket = t // self.event_beat_ms
         _, created = self.w.append_event(
             source="self", kind="vital",
             ext_id=f"{self.node}:vital:{bucket}",
-            ts=bucket * self.heartbeat_ms, recv_ts=t,
+            ts=bucket * self.event_beat_ms, recv_ts=t,
             payload=b"alive",
         )
-        self._last_beat = t
         return created
-
-    # 投递已经搬到 shell（gits/shell.py）。ghost 只管心跳与快照——
-    # 一个进程只认一种外设，比什么都塞在一起更容易看住。
 
     # ── 快照 ──
     def snapshot(self, t: int | None = None) -> None:

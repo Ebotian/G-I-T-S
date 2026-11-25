@@ -17,6 +17,7 @@
 | 数据目录 | `/srv/gits/var` |
 | 夜间家务 | `gits-housekeep.timer`，每晚 03:17（±10 分钟随机）|
 | **内核** | **`gits-ghost.service` running，`Type=notify` + `WatchdogSec=2min` + `MemoryMax=200M`** |
+| **通道** | **`gits-shell.service` running，文件通道（outbox.jsonl / inbox.jsonl），`MemoryMax=150M`** |
 | 依赖镜像 | `UV_INDEX_URL` 指向阿里云（uv 不读 pip.conf）|
 
 ## 2. 实测数字（都是这台 2C/1.6G 上量的）
@@ -31,6 +32,7 @@
 | `python -m synth.eval_search`（3 种子） | 3.9 s | 37.0 MB |
 | `python -m synth.eval_decay`（5 种子） | 13.4 s | 36.5 MB |
 | **`gits-ghost` 常驻** | — | **11.5–11.8 MB** |
+| **`gits-shell` 常驻** | — | **12.0 MB** |
 
 两条结论：
 
@@ -52,7 +54,34 @@
 | 5 | **没有真实数据** | `var/gits.db` 是空的；夜间家务跑出来是 `replayed 0 events` |
 | 6 | **没有备份/轮转** | 保留策略写在 schema §8，一行都没实现 |
 
-## 3.1 内核跑起来之后的实测
+## 3.1 投递闭环（实测）
+
+```
+say-out → outbox(pending)
+  → shell 领取(租约) → 写 outbox.jsonl → status=sent, meta=file, attempts=1
+  → outcomes(1, 'delivered')
+inbox "在的" → shell 收 → events(msg_in) → outcomes(1, 'reply')
+```
+
+这条闭环证明了三件之前只有设计文档的东西：**租约防重复、TTL 过期丢弃、
+回复能挂回上一条已发送的 outbox**（`outcomes` 是 `influence` 强化的输入，
+§3.2 说它是"她能学习的唯一途径"）。
+
+## 3.2 一个数据量上的自查
+
+心跳每 5 分钟一拍，如果每拍都写事件：**288 条/天、10 万条/年**，全是
+"我还活着"——而 `events` 是唯一真相，不能拿来放这个。
+
+所以拆开：
+
+| 记什么 | 存哪 | 频率 |
+|---|---|---|
+| 我还在 | `nodes_health.last_seen` | 每 5 分钟（廉价 upsert，不留历史）|
+| 那个小时她在 | `events(kind='vital')` | **每小时一条** |
+
+有测试钉着：一小时拍 12 次，`events` 只有 1 条，而 `last_seen` 是最后一次。
+
+## 3.3 内核跑起来之后的实测
 
 ```
 Active: active (running)        内存 11.5 MB（上限 200 MB）

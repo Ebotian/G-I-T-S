@@ -38,15 +38,26 @@ def test_同一桶只写一条心跳(tmp_path: Path) -> None:
     with _db(tmp_path) as db:
         g = Ghost(db=db)
         assert g.beat(T0) is True
-        assert g.beat(T0 + 1000) is False        # 同一桶
+        assert g.beat(T0 + 1000) is False        # 同一小时桶
         assert db.scalar("SELECT count(*) FROM events WHERE kind='vital'") == 1
+
+
+def test_liveness每拍都更新但事件每小时一条(tmp_path: Path) -> None:
+    """288 条/天的心跳会把 events 淹掉——所以 liveness 走 nodes_health。"""
+    with _db(tmp_path) as db:
+        g = Ghost(db=db)
+        for i in range(12):                       # 一小时内拍 12 次
+            g.beat(T0 + i * 5 * 60_000)
+        assert db.scalar("SELECT count(*) FROM events WHERE kind='vital'") == 1
+        seen = db.scalar("SELECT last_seen FROM nodes_health WHERE node_id='cloud'")
+        assert seen == T0 + 11 * 5 * 60_000
 
 
 def test_换桶就再写一条(tmp_path: Path) -> None:
     with _db(tmp_path) as db:
         g = Ghost(db=db)
         g.beat(T0)
-        assert g.beat(T0 + g.heartbeat_ms) is True
+        assert g.beat(T0 + g.event_beat_ms) is True
         assert db.scalar("SELECT count(*) FROM events WHERE kind='vital'") == 2
 
 
