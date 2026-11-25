@@ -2,11 +2,10 @@
 
 ## 0. 一句话
 
-> **部署管道通了，运行时还没写。**
+> **部署管道通了；内核第一版跑起来了；对话/抽取还没接。**
 >
-> `gits` 现在全是**一次性命令**（say / replay / recall / turn / sync / verify），
-> 没有一个常驻循环。所以 systemd 里只装了「夜间家务」这一个真能跑的单元，
-> 没有假装 `gits-ghost` 已经存在。
+> `gits-ghost.service` 已经是 `Type=notify` 的真服务：心跳、投递、快照。
+> 但它**不对话、不抽取、不触发**——那些要模型 key 和还没写的 HTTP 端。
 
 ## 1. 已经装好的
 
@@ -17,6 +16,7 @@
 | 虚拟环境 | `/srv/gits/.venv`，numpy 2.2.6 + statsmodels 0.15.0，**281 MB** |
 | 数据目录 | `/srv/gits/var` |
 | 夜间家务 | `gits-housekeep.timer`，每晚 03:17（±10 分钟随机）|
+| **内核** | **`gits-ghost.service` running，`Type=notify` + `WatchdogSec=2min` + `MemoryMax=200M`** |
 | 依赖镜像 | `UV_INDEX_URL` 指向阿里云（uv 不读 pip.conf）|
 
 ## 2. 实测数字（都是这台 2C/1.6G 上量的）
@@ -30,6 +30,7 @@
 | `import statsmodels.api` | **7.72 s** | **162.7 MB** |
 | `python -m synth.eval_search`（3 种子） | 3.9 s | 37.0 MB |
 | `python -m synth.eval_decay`（5 种子） | 13.4 s | 36.5 MB |
+| **`gits-ghost` 常驻** | — | **11.5–11.8 MB** |
 
 两条结论：
 
@@ -44,15 +45,27 @@
 
 | # | 缺口 | 影响 |
 |---|---|---|
-| 1 | **没有守护进程** | `ghost` / `shell` / `dream` 都是设计里的名字，没有常驻循环、没有心跳、没有 outbox 投递 |
+| 1 | ~~没有守护进程~~ | **已解决**：`gits-ghost` 有心跳、投递、快照。但 `shell`（通道）和 `dream`（作业）还只是设计 |
 | 2 | **没有 HTTP 端** | 拉取式作业队列（§15.4）和跨机同步的传输层都没写，同步只能在同机两个文件之间做 |
 | 3 | **没有 API key** | `DEEPSEEK_API_KEY` 还没配，抽取/生成一次都没跑过 |
 | 4 | **没有 config.toml** | 所有参数还在代码默认值里；§14.6 那条"承诺线"还没有地方声明 |
 | 5 | **没有真实数据** | `var/gits.db` 是空的；夜间家务跑出来是 `replayed 0 events` |
 | 6 | **没有备份/轮转** | 保留策略写在 schema §8，一行都没实现 |
 
-第 1 条是关键：**没有它，前面所有验证都停留在"库"和"命令"层面**，
-没有一个是"跑着的服务"。
+## 3.1 内核跑起来之后的实测
+
+```
+Active: active (running)        内存 11.5 MB（上限 200 MB）
+Type=notify                     WatchdogUSec=2min
+kill -9 → NRestarts=1, ActiveState=active     ← 自己起来了
+events=1 条 vital
+```
+
+值得记一笔：**重启不会产生第二条心跳**。`ext_id` 是 `cloud:vital:<5分钟桶>`，
+重启后同一桶写不进去——这正是幂等键该干的活。
+
+还有：`_last_beat` 在内存里，重启后归零，所以第一拍一定会尝试写心跳。
+如果键不是按桶算的，每次重启都会多一条"她还活着"，一年下来就是七千条噪音。
 
 ## 4. 为什么先装 timer 而不是先写守护进程
 
