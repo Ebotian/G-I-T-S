@@ -74,6 +74,16 @@ def test_重放和实时落出同样的图(db, stub) -> None:
     assert content2 == content == ["他今天开会开得很久"]
 
 
+def test_同一个实体不攒重复内容(db, stub) -> None:
+    _msg(db, "开会开到吐", "m1")
+    _msg(db, "又是会", "m2")
+    for ev in E.pending(db):
+        E.extract(db, ev)
+    names = [r[0] for r in db.q(
+        "SELECT content FROM node_content WHERE node_id LIKE 'e:%'")]
+    assert sorted(names) == sorted(set(names)), "同名实体只该有一行内容"
+
+
 def test_抽两遍图不变(db, stub) -> None:
     ev = _msg(db, "开会开到吐")
     E.extract(db, ev)

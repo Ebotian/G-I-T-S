@@ -119,8 +119,14 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
             "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
             " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
             (nid_, "entity", ts, "world", 1.0, 1.0, ts))
-        conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
-                     " VALUES(?,?,?)", (nid_, name, ts))
+        # **同一个实体不该攒一堆同样的内容行**。实测三条消息提到了同一个
+        # 「消息」，于是 node_content 里躺着三份一模一样的文本——
+        # 检索时它们会互相挤占名额，r 也算不准。
+        conn.execute(
+            "INSERT INTO node_content(node_id, content, created_ts)"
+            " SELECT ?,?,? WHERE NOT EXISTS"
+            " (SELECT 1 FROM node_content WHERE node_id=? AND content=?)",
+            (nid_, name, ts, nid_, name))
 
     def link(a: str, b: str, w: float, edge_kind: str) -> None:
         conn.execute(
