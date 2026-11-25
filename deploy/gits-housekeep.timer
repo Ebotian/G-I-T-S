@@ -1,0 +1,12 @@
+[Unit]
+Description=每晚跑一次 G-I-T-S 夜间家务
+Documentation=file:/srv/gits/docs/research/ecs.md
+
+[Timer]
+# 03:17 而不是整点：整点是所有人都在排队的时候
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
