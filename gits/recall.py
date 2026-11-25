@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from gits.db import DB
 from gits.fsrs import DAY, retrievability
 from gits.scope import visible
-from gits.search import index_node, search
+from gits.search import Hit, index_node, search
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,25 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
 
     hits = search(db.conn, query, k=k * 3, context=context, r_of=r_of,
                   scopes=visible(actor))
+    # 注意力权重：她先留意什么。**不是规则，是偏好**——只调排序，不删候选。
+    # 漂移改的就是这张表（attention.py），所以它必须真的影响检索，
+    # 否则"漂移"是装饰。
+    from gits.attention import weights
+
+    topic_w = weights(db, actor)
+    if topic_w and hits:
+        adjusted = []
+        for h in hits:
+            row = latest_content(db, h.node_id)
+            text = str(row["content"]) if row else ""
+            mult = 1.0
+            for topic, w in topic_w.items():
+                if topic and topic in text:
+                    mult = max(mult, max(0.5, min(2.0, w)))
+            # Hit 是冻结的：换个对象，不要原地改
+            adjusted.append(Hit(node_id=h.node_id, score=h.score * mult,
+                                sim=h.sim, why=h.why))
+        hits = sorted(adjusted, key=lambda h: -h.score)
     out: list[Recalled] = []
     for h in hits:
         row = latest_content(db, h.node_id)

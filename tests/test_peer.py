@@ -183,3 +183,55 @@ def test_漂移本身是事件且只在私有域(db) -> None:
     ev = db.one("SELECT scope, payload FROM events WHERE kind='drift'")
     assert ev is not None and ev["scope"] == self_of("peer1")
     assert json.loads(ev["payload"])["pair"] == ["peer1", "peer2"]
+
+
+# ── 补齐的两处：注意力真的影响检索 / 漂移真的会跑 ─────────────
+
+
+def test_注意力权重影响检索排序(db) -> None:
+    from gits.attention import seed as seed_w
+    from gits.recall import recall, reindex
+
+    for nid, text in (("n:work", "开会开到很晚"), ("n:coffee", "喝了咖啡")):
+        with Writer(db).txn() as c:
+            c.execute("INSERT INTO nodes(id, kind, born_ts, scope, s, r,"
+                      " last_touch) VALUES(?,?,?,?,?,?,?)",
+                      (nid, "episode", T0, "world", 30.0, 1.0, T0))
+            c.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                      " VALUES(?,?,?)", (nid, text, T0))
+    reindex(db)
+    before = [r.node_id for r in recall(db, "开会 咖啡", actor="her", now_ms=T0)]
+    assert set(before) == {"n:work", "n:coffee"}
+
+    seed_w(db, "her", {"开会": 2.0, "咖啡": 0.5})
+    after = [r.node_id for r in recall(db, "开会 咖啡", actor="her", now_ms=T0)]
+    assert after[0] == "n:work", "她先留意的东西该排在前面"
+    assert set(after) == set(before), "只调排序，不删候选"
+
+
+def test_漂移只漂非主个体(db, monkeypatch) -> None:
+    from gits import ghost as G
+
+    attention.seed(db, "peer1", {"开会": 1.0})
+    attention.seed(db, "peer2", {"开会": 1.0})
+    g = G.Ghost(db=db)
+    assert g.drift(T0) == 1, "只有一对 peer"
+    assert attention.weights(db, "peer1")["开会"] != 1.0
+
+
+def test_没有数据就不施压(db) -> None:
+    from gits import peer as P
+
+    assert P.overlap(db, "peer1", "peer2") is None
+    assert attention.overlap_pressure(None) == 0.0
+
+
+def test_重合率越高施压越大(db) -> None:
+    from gits import peer as P
+
+    for i in range(3):
+        P.say(db, "peer1", "peer2", "我最近总在想同一件事，反反复复地说它", now=T0 + i)
+        P.say(db, "peer2", "peer1", "我最近总在想同一件事，反反复复地说它", now=T0 + i)
+    ov = P.overlap(db, "peer1", "peer2")
+    assert ov is not None and ov > 0.9, "几乎一模一样"
+    assert attention.overlap_pressure(ov) == 1.0

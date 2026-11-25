@@ -229,3 +229,32 @@ def observe(db: DB) -> dict:
         "unsaid": int(db.scalar(
             "SELECT count(*) FROM events WHERE kind='unsaid'") or 0),
     }
+
+
+def overlap(db: DB, frm: str, to: str, *, n: int = 20) -> float | None:
+    """这一对最近说的话有多像。**趋同控制的输入。**
+
+    3-gram Jaccard，不引依赖。样本不够就返回 None——不知道就别施压。
+    """
+    rows = db.q(
+        "SELECT text FROM outbox WHERE channel='peer'"
+        " AND json_extract(meta, '$.from')=? AND json_extract(meta, '$.to')=?"
+        " ORDER BY id DESC LIMIT ?", (to, frm, n))
+    back = db.q(
+        "SELECT text FROM outbox WHERE channel='peer'"
+        " AND json_extract(meta, '$.from')=? AND json_extract(meta, '$.to')=?"
+        " ORDER BY id DESC LIMIT ?", (frm, to, n))
+    a = " ".join(str(r["text"]) for r in rows)
+    b = " ".join(str(r["text"]) for r in back)
+    if len(a) < 20 or len(b) < 20:
+        return None
+    return _jaccard(a, b)
+
+
+def _jaccard(a: str, b: str, n: int = 3) -> float:
+    def grams(s: str) -> set[str]:
+        return {s[i:i + n] for i in range(max(0, len(s) - n + 1))}
+    ga, gb = grams(a), grams(b)
+    if not ga or not gb:
+        return 0.0
+    return len(ga & gb) / len(ga | gb)

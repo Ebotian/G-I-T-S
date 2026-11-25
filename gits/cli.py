@@ -358,8 +358,10 @@ def build_parser() -> argparse.ArgumentParser:
     pr.set_defaults(fn=cmd_peers)
 
     sd = sub.add_parser("seed", help="导入初始设定（写成一事件，不是文件）")
-    sd.add_argument("text")
+    sd.add_argument("text", nargs="?", default="")
     sd.add_argument("--actor", default="her")
+    sd.add_argument("--topic", action="append", default=[],
+                    metavar="话题=权重", help="初始注意力，可重复")
     sd.set_defaults(fn=cmd_seed)
 
     pn = sub.add_parser("persona", help="她现在的自我描述 / 从哪几条来")
@@ -492,12 +494,28 @@ def cmd_wipe(args: argparse.Namespace) -> int:
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
+    from gits import actors, attention
     from gits.persona import seed
 
     db = DB(Path(args.db))
-    ev = seed(db, args.text, actor=args.actor)
-    print(f"种下第 {ev} 条事件（scope=self:{args.actor}）")
-    print("  —— 它现在是一条普通记忆：会衰减，会被顶掉，也会被压进摘要。")
+    if not args.text and not args.topic:
+        print("给点什么：一段文字，和/或 --topic 话题=权重")
+        return 1
+    actors.ensure(db, args.actor, is_main=(args.actor == actors.MAIN))
+    if args.text:
+        ev = seed(db, args.text, actor=args.actor)
+        print(f"种下第 {ev} 条事件（scope=self:{args.actor}）")
+        print("  —— 它是一条普通记忆：会衰减、会被顶掉、也会被压进摘要。")
+    if args.topic:
+        weights = {}
+        for item in args.topic:
+            if "=" not in item:
+                print(f"看不懂「{item}」，要写成 话题=权重")
+                return 1
+            name, val = item.split("=", 1)
+            weights[name.strip()] = float(val)
+        n = attention.seed(db, args.actor, weights)
+        print(f"种下 {n} 个注意力偏好（会漂，不固定）")
     return 0
 
 

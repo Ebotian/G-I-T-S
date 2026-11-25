@@ -196,6 +196,9 @@ class Ghost:
             got = self.night(t)
             if got:
                 did["night"] = got
+            drifted = self.drift(t)
+            if drifted:
+                did["drift"] = drifted
         return did
 
     def night(self, t: int | None = None) -> str:
@@ -220,6 +223,22 @@ class Ghost:
         if got is None:
             return f"{chk.why}；但自我域里没有可选的东西，不更新"
         return f"{chk.why} → 第 {len(got.picked)} 个节点写成 v{got.event_id}"
+
+    def drift(self, t: int | None = None) -> int:
+        """注意力漂一天。**只漂非主个体**——她的变化必须来自真实互动。"""
+        from itertools import combinations
+
+        from gits import actors, attention, peer as P
+
+        t = now_ms() if t is None else t
+        names = actors.peers(self.db)          # 不含她
+        n = 0
+        for a, b in combinations(names, 2):
+            ov = P.overlap(self.db, a, b)
+            attention.step(self.db, pair=(a, b), now=t,
+                           pressure=attention.overlap_pressure(ov))
+            n += 1
+        return n
 
     def window(self, t: int | None = None) -> str:
         """该不该换窗。**整理是后台活，先在闲得够久的时候做。**"""
