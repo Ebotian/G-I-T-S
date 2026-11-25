@@ -2,13 +2,17 @@
 name = "gits"
 version = "0.0.1"
 description = "G-I-T-S: a ghost with many shells"
-requires-python = ">=3.10"
+requires-python = ">=3.10"  # ECS 是 3.10.12，锁死下限
 dependencies = ["numpy>=1.24"]
 
-#: 只在 dream / synth / tests 里用。ghost 不许装（152 MB / 2.1 s，
-#: 见 docs/research/stats-libs.md）。安装：uv pip install -e ".[dream]"
+#: 按机器分层安装（docs/research/multi-node.md §6-7）：
+#:   cloud   uv sync --extra ghost --extra dream
+#:   office  uv sync --extra ghost --extra ml --extra dev
+#: 每层都有实测内存/磁盘代价，见 docs/research/stats-libs.md
 [project.optional-dependencies]
 dream = ["statsmodels>=0.14"]
+ml = ["onnxruntime>=1.18"]
+dev = ["pytest>=8"]
 
 [project.scripts]
 gits = "gits.cli:main"
