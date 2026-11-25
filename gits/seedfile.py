@@ -186,3 +186,18 @@ def apply(db, b: Bundle, *, now: int | None = None) -> dict[str, int]:
         if a.topics:
             counts["topics"] += attention.seed(db, a.actor_id, a.topics, ts=now)
     return counts
+
+
+def projection_gap(db) -> int:
+    """种子事件有多少条还没进投影。**大于 0 就说明 A 段还是空的。**
+
+    导入写的是事件，A 段读的是投影节点——这两步之间要跑一次 replay。
+    不提示的话，使用者会以为导入没生效。
+    """
+    events = db.scalar(
+        "SELECT count(*) FROM events WHERE kind IN ('seed','persona')"
+        " AND payload IS NOT NULL"
+        " AND id NOT IN (SELECT event_id FROM redactions)") or 0
+    nodes = db.scalar(
+        "SELECT count(*) FROM nodes WHERE kind='self' AND scope LIKE 'self:%'") or 0
+    return max(0, int(events) - int(nodes))

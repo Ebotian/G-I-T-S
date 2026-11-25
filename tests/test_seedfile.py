@@ -138,3 +138,27 @@ def test_模板文件本身合法(db) -> None:
     tpl = Path(__file__).resolve().parents[1] / "docs" / "seed-template.json"
     b = seedfile.parse(tpl.read_text(encoding="utf-8"))
     assert len(b.actors) == 3 and sum(a.main for a in b.actors) == 1
+
+
+def test_投影没跟上要提示(db) -> None:
+    b = seedfile.parse(_doc())
+    assert seedfile.projection_gap(db) == 0, "还没导之前什么都没有"
+    seedfile.apply(db, b, now=T0)
+    assert seedfile.projection_gap(db) == 1, \
+        "写的是事件，A 段读的是投影——中间要跑一次 replay"
+
+
+def test_重放之后就不提示了(db) -> None:
+    from gits import project
+
+    seedfile.apply(db, seedfile.parse(_doc()), now=T0)
+    project.restore(db)
+    assert seedfile.projection_gap(db) == 0
+
+
+def test_删掉的内容不算缺口(db) -> None:
+    from gits import wipe
+
+    seedfile.apply(db, seedfile.parse(_doc()), now=T0)
+    wipe.wipe(db, now=T0)
+    assert seedfile.projection_gap(db) == 0, "清空之后不该报「还没重放」"

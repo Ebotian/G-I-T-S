@@ -484,14 +484,12 @@ def cmd_import_seed(args: argparse.Namespace) -> int:
     from gits import seedfile
 
     db = DB(Path(args.db))
+    path: Path | None = None
     if args.path == "-":
         # 从管道读：明文**根本不落盘**，也就不需要 care 它放在哪
         text = sys.stdin.read()
     else:
         path = Path(args.path)
-        if seedfile.inside_repo(path):
-            print("这个文件在仓库里。换到仓库外面再导——文件不进来，状态才进来。")
-            return 1
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
@@ -504,16 +502,28 @@ def cmd_import_seed(args: argparse.Namespace) -> int:
         print("（整份拒绝，一条都没写）")
         return 1
     print(seedfile.describe(bundle, inspect=args.inspect))
+    # **先查 ephemeral，再查路径。**反过来的话，一个被误写进仓库的示例包
+    # 会报「文件在仓库里」——而真正的问题（它是示例包）就被那句话盖住了。
     if bundle.ephemeral and not args.allow_ephemeral:
         print("\n这是示例包（ephemeral），生产环境默认不收。"
               "真要导就加 --allow-ephemeral。")
         return 1
+    if path is not None and seedfile.inside_repo(path):
+        print("\n这个文件在仓库里。换到仓库外面再导——文件不进来，状态才进来。")
+        return 1
     if not args.write:
         print("\n只是校验。要真写就加 --write。")
         return 0
+
     counts = seedfile.apply(db, bundle)
     print("\n写进去了：" + json.dumps(counts, ensure_ascii=False))
-    print("现在运行一次 replay --restore 让投影跟上")
+    gap = seedfile.projection_gap(db)
+    if gap:
+        print("\n⚠ 投影还没跟上：%d 条自我描述还只在事件里。" % gap)
+        print("   A 段现在仍然是空的。跑这一行：")
+        print(f"   gits --db {args.db} replay --restore")
+    else:
+        print("投影已经跟上，A 段生效。")
     return 0
 
 
