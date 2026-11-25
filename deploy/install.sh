@@ -39,7 +39,10 @@ for a in $ACTORS; do
 done
 
 # ── 2. 源码（只有人能看） ─────────────────────────────────
-if [ -d "$SRC/.git" ]; then
+# 从 post-receive 钩子里调用时，HEAD 已经是新的，别再 fetch（会绕回自己）。
+if [ "${GITS_SKIP_GIT:-0}" = "1" ]; then
+  echo "跳过 git（由钩子调用）"
+elif [ -d "$SRC/.git" ]; then
   git -C "$SRC" fetch -q origin && git -C "$SRC" reset -q --hard origin/main
 else
   mkdir -p "$(dirname "$SRC")"
