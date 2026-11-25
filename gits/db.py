@@ -177,15 +177,18 @@ class Writer:
         prompt_hash: str | None = None,
         request: bytes | None = None,
         usage_json: str | None = None,
+        meta: str | None = None,
         ts: int | None = None,
     ) -> int:
         with self.txn() as c:
             cur = c.execute(
                 "INSERT INTO model_calls(ts, kind, model, prompt_hash, request,"
-                " response, usage_json, event_id) VALUES(?,?,?,?,?,?,?,?)",
+                " response, usage_json, event_id, meta)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
                 (
                     now_ms() if ts is None else ts,
-                    kind, model, prompt_hash, request, response, usage_json, event_id,
+                    kind, model, prompt_hash, request, response, usage_json,
+                    event_id, meta,
                 ),
             )
             return int(cur.lastrowid)

@@ -346,6 +346,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status").set_defaults(fn=cmd_status)
 
+    pr = sub.add_parser("peers", help="谁存在、它们之间发生过什么")
+    pr.add_argument("--add", default=None, help="登记一个 peer（不给就只看）")
+    pr.add_argument("--seed", default=None,
+                    help="JSON：{\"话题\": 权重}，只对 --add 生效")
+    pr.set_defaults(fn=cmd_peers)
+
+    t = sub.add_parser("peer-turn", help="给某个实例跑一个回合（回应或不回应）")
+    t.add_argument("actor")
+    t.add_argument("--dry-run", action="store_true")
+    t.set_defaults(fn=cmd_peer_turn)
+
     s = sub.add_parser("say")
     s.add_argument("text")
     s.add_argument("--source", default="wechat")
@@ -435,6 +446,54 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("export").set_defaults(fn=cmd_export)
     sub.add_parser("import").set_defaults(fn=cmd_import)
     return p
+
+
+def cmd_peers(args: argparse.Namespace) -> int:
+    from gits import actors, attention, peer
+
+    db = DB(Path(args.db))
+    actors.ensure(db, actors.MAIN, is_main=True)
+    if args.add:
+        actors.ensure(db, args.add)
+        if args.seed:
+            n = attention.seed(db, args.add, json.loads(args.seed))
+            print(f"登记 {args.add}，初始偏好 {n} 个话题")
+        else:
+            print(f"登记 {args.add}")
+    print("实例：")
+    for a in actors.all_of(db):
+        mark = "（主，有对外通道）" if a.is_main else ""
+        w = attention.weights(db, a.actor_id)
+        pref = "、".join(f"{k}={v:.2f}" for k, v in w.items()) or "（没有初始偏好）"
+        print(f"  {a.actor_id}{mark}  {pref}")
+    obs = peer.observe(db)
+    print("发生过的事：")
+    print(f"  第一次主动    {obs['first_contact_ts'] or '还没有'}")
+    print(f"  每对条数      {obs['by_pair'] or '无'}")
+    print(f"  沉默的回合    {obs['silent']}")
+    print(f"  选项露出次数  {obs['affordances']}")
+    print(f"  没说出口      {obs['unsaid']}")
+    if obs["affordances"] and not obs["first_contact_ts"]:
+        print("  → 露过面但还没人开口。**这就是数据**，不是故障。")
+    return 0
+
+
+def cmd_peer_turn(args: argparse.Namespace) -> int:
+    from gits import actors, peer
+
+    db = DB(Path(args.db))
+    turn = peer.received(db, args.actor)
+    if not turn:
+        print(f"{args.actor} 现在没有轮到它说话")
+        return 0
+    ev = turn[0]
+    text = (ev["payload"] or b"").decode("utf-8")
+    print(f"[{ev['source']}] {text}")
+    if args.dry_run:
+        return 0
+    peer.silent(db, args.actor, ev)          # P0：先只记回合，不生成内容
+    print("（这一版还不生成内容：只记了一个回合）")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
