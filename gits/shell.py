@@ -47,6 +47,8 @@ class FileChannel:
     """
 
     name = "file"
+    #: 这个通道认哪些 channel 名。文件通道是调试用的兜底，认"没有专门通道"的那些。
+    names = frozenset({"file", "desk_audio", "mumble"})
 
     def __init__(self, out_file: str | Path, in_file: str | Path) -> None:
         self.out = Path(out_file)
@@ -185,6 +187,7 @@ class WeixinAdapter:
     """把微信通道包成 Channel：顺手启动/停止它的后台轮询线程。"""
 
     name = "weixin"
+    names = frozenset({"weixin"})
 
     def __init__(self, account, *, cursor_path=None) -> None:
         from gits.channels.weixin import WeixinChannel

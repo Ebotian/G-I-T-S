@@ -38,13 +38,23 @@ class Dispatch:
 
 
 def claim(db: DB, *, now: int | None = None, limit: int = 20,
-          lease_ms: int = 60_000) -> list[dict]:
-    """把 pending 领到手。带租约，别人这段时间抢不走。"""
+          lease_ms: int = 60_000,
+          names: set[str] | frozenset[str] | None = None) -> list[dict]:
+    """把 pending 领到手。带租约，别人这段时间抢不走。
+
+    `names` 限定这个通道认得哪些名字——否则文件通道会把微信的活儿也领走，
+    然后"发到文件里"，而你以为发出去了。
+    """
     now = now or now_ms()
-    rows = db.q(
-        "SELECT * FROM outbox WHERE status='pending'"
-        " AND (lease_until IS NULL OR lease_until < ?)"
-        " ORDER BY id LIMIT ?", (now, limit))
+    sql = ("SELECT * FROM outbox WHERE status='pending'"
+           " AND (lease_until IS NULL OR lease_until < ?)")
+    args: list = [now]
+    if names:
+        sql += " AND channel IN (%s)" % ",".join("?" * len(names))
+        args.extend(sorted(names))
+    sql += " ORDER BY id LIMIT ?"
+    args.append(limit)
+    rows = db.q(sql, args)
     if not rows:
         return []
     with Writer(db).txn() as c:
@@ -82,7 +92,8 @@ def dispatch(db: DB, channel, *, now: int | None = None, max_attempts: int = 3,
     out = Dispatch()
     out.expired = expire(db, now=now, ttl_ms=ttl_ms)
 
-    for row in claim(db, now=now, limit=limit):
+    for row in claim(db, now=now, limit=limit,
+                     names=getattr(channel, "names", None)):
         if row["attempts"] and int(row["attempts"]) > max_attempts:
             finish(db, row["id"], "failed", meta="too-many-attempts")
             out.failed += 1

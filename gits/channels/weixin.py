@@ -164,6 +164,7 @@ class WeixinChannel:
     """给 shell 用的通道。长轮询在后台线程，主循环只从队列取。"""
 
     name = "weixin"
+    names = frozenset({"weixin"})
 
     def __init__(self, account: Account, *, cursor_path: str | Path | None = None,
                  poll_timeout: float = 40.0) -> None:
