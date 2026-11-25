@@ -20,6 +20,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from gits.fsrs import Memory, Rating
+
 DAY = 86_400_000
 
 #: 幂律遗忘的两个常数（FSRS 用的就是 19/81 与 −0.5）
@@ -112,7 +114,28 @@ class Frequency(State):
         return float(self.touches)
 
 
-MODELS = {"touches": Touches, "spacing": Spacing, "actr": ActR,
+@dataclass
+class Fsrs(State):
+    """FSRS-5（默认权重）。**先验地采用社区长期实践**——我们还没有自己的数据。
+
+    与 A/B/C 的区别不只是公式：它有难度 D 的均值回归、有 lapse 的重算，
+    而且 S 的增益同时受 D、S、R 三者影响。
+    """
+
+    mem: object = field(default_factory=lambda: Memory())
+
+    def recall(self, t: int, model: str) -> None:
+        self.mem.review(t, Rating.GOOD)      # 我们只有"用上了"这一个正向信号
+        self.touches += 1
+        self.recalls.append(t)
+        self.last = t
+        self.s = self.mem.s * DAY
+
+    def score(self, t: int) -> float:
+        return self.mem.r(t)
+
+
+MODELS = {"fsrs": Fsrs, "touches": Touches, "spacing": Spacing, "actr": ActR,
           "recency": Recency, "frequency": Frequency}
 
 #: 前三个是候选方案，后两个是基线——没有基线就说不清"多出来的复杂度买到了什么"
