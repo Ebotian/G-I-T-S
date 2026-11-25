@@ -65,3 +65,4 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/rhythm.md`](docs/research/rhythm.md) — 节律：作息是学出来的分布，不是配置的时段
 - [`docs/research/stats-libs.md`](docs/research/stats-libs.md) — 统计库用哪个、不用哪个、**在哪一层用**（ECS 实测 import 耗时与 RSS）
 - [`docs/research/multi-node.md`](docs/research/multi-node.md) — 多端调度：频率 × 硬件 × 同步节律；依赖预算与 per-node 安装
+- [`docs/research/sync.md`](docs/research/sync.md) — 分层同步：人格秒级、真相按计算需求、投影不传、大产物只传身份
