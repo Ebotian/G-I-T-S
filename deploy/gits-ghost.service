@@ -21,7 +21,7 @@ WorkingDirectory=/srv/gits-runtime
 EnvironmentFile=/etc/gits.env
 ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
     --db /var/lib/gits/shared/gits.db ghost \
-    --node cloud --persona /var/lib/gits/her/persona.md
+    --node cloud
 
 # 隔离三层：文件权限 / InaccessiblePaths / 非 root。
 # 实例跑的是 /srv/gits-runtime 里的一份代码拷贝，不需要仓库。
