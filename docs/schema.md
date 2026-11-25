@@ -22,12 +22,15 @@
 
 ## 2. 库的划分
 
-三个库，对应三种持久性（§11.8-5）：
+三个库，对应三种持久性（§11.8-5）。**工作机另有一份只读副本**（§15.8）：
 
 ```
 gits-events.db   同步写真相。synchronous=FULL，断电最多丢最后一秒
 gits-graph.db    派生。synchronous=NORMAL，丢了从 events 重放
 gits-ops.db      作业与积压。丢了可以重新排队，不影响她记得什么
+
+工作机副本（只读，可整个删掉重建）
+gits-replica.db  = events 副本 + 本地重放出的图 + events_pending（唯一写入口）
 ```
 
 分开的理由不是洁癖：`FULL` 的 fsync 很贵，但只对 `events` 值得。
@@ -143,6 +146,9 @@ backlog(kind TEXT PRIMARY KEY, n INTEGER, oldest_ts INTEGER);
 -- 节点心跳
 nodes_health(node_id TEXT PRIMARY KEY, last_seen INTEGER, caps TEXT, idle_since INTEGER);
 
+-- 副本同步游标（§15.8）：同步协议就是重放协议，只需要一个 id
+sync_cursor(node_id TEXT PRIMARY KEY, last_event_id INTEGER);
+
 -- 配给制（§18.4）：她是知情的，余额是她的状态而不是你的开关
 quota(day TEXT, kind TEXT, used INTEGER, limit INTEGER, PRIMARY KEY(day, kind));
 -- kind: llm_in | llm_out | fetch | search | ocr | tts_chars | asr_sec | exec_sec
@@ -206,9 +212,20 @@ gits forget --actor <id>      整个实例的所有 self:* 记忆
 
 ---
 
-## 9. 变更记录
+## 9. 时间戳的三个字段
+
+| 字段 | 权威性 | 用途 |
+|---|---|---|
+| `ts` | 节点本地钟，**仅供参考** | 叙事里说"当时" |
+| `recv_ts` | **ECS，唯一权威**（NTP，Asia/Shanghai） | 排序、学习、窗口、游标之外的一切 |
+| `label` | 由 `recv_ts` 派生（小时-周、相位） | **只喂算法当坐标，不写进 prompt** |
+
+原则见 DESIGN §14.0：**墙钟做参照和标签，不参与行为决策。** 所以任何"9 点""凌晨""每日"都不应该出现在决策代码里，只应该出现在 `label` 的生成函数里，以及一条声明式的承诺（§14.6）。
+
+## 10. 变更记录
 
 | 日期 | 改了什么 |
 |---|---|
 | 2026-11-25 | 初版 v0 |
+| 2026-11-25 | 加 §9 时间戳三个字段；副本同步游标 `sync_cursor`；`events_pending` |
 | 2026-11-25 | 审计后修：`ext_id` 改 NOT NULL（可空等于没有幂等）；新增 `observability`、`model_calls`；`nodes.scope`；`outbox.status` 增加 `unknown`；新增 §8 保留与删除 |
