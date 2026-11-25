@@ -132,6 +132,29 @@ def render_c(ctx: TurnContext) -> str:
     return "\n".join(parts) + "\n"
 
 
+def messages(seed: PersonaSeed, snap: RelationSnapshot, ctx: TurnContext,
+             *, turns: Sequence[tuple[str, str]] = ()) -> list[dict]:
+    """真正的请求体。**形状就是缓存策略**（docs/research/context-budget.md）。
+
+    官方规则：只有「完整匹配缓存前缀单元」才命中。所以：
+
+        system:  A + B              ← 一天/一小时一变，其余逐字不变
+        user/assistant: 历史轮次      ← 只追加，永不重写
+        user:    C 的可变部分        ← 易变的全部塞这里
+
+    之前把「刚才几轮」写进 system，于是前缀每轮都断——实测命中率 0。
+    """
+    parts = [p for p in (ctx.recalled and "# 你想起来的事" or "",
+                         *[f"- {r}" for r in ctx.recalled],
+                         ctx.quota_hint, "# 现在", ctx.stimulus.strip()) if p]
+    out: list[dict] = [{"role": "system", "content": render_a(seed) + render_b(snap)}]
+    for role, text in turns:
+        out.append({"role": "user" if role == "他" else "assistant",
+                    "content": text})
+    out.append({"role": "user", "content": "\n".join(parts)})
+    return out
+
+
 def assemble(seed: PersonaSeed, snap: RelationSnapshot, ctx: TurnContext) -> Prompt:
     a, b, c = render_a(seed), render_b(snap), render_c(ctx)
     # 顺序就是缓存布局：稳定前缀在前，易变在后（DESIGN §5.4）

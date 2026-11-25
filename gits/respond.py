@@ -14,7 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from gits.context import PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket
+from gits.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
+                       bucket, messages)
 from gits.db import DB, Writer, now_ms
 from gits.llm import Reply, chat, cost_cny
 from gits.recall import lines, recall
@@ -88,18 +89,15 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     # C 段：这一轮才有的东西。**检索在这里发生**——上下文扩展 + r。
     history = recent(db)
+    seed = persona or load_persona(None)
+    snap = relation(db, now=now)
     hits = recall(db, text, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)
-    prompt = assemble(
-        persona or load_persona(None),
-        relation(db, now=now),
-        TurnContext(stimulus=text, recent=history, recalled=lines(hits)),
-    )
-    reply = chat(
-        [{"role": "system", "content": prompt.text},
-         {"role": "user", "content": text}],
-        model=model, max_tokens=max_tokens, thinking=False,
-    )
+    ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits))
+    prompt = assemble(seed, snap, ctx)
+    # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
+    body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
+    reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
 
     call_id = Writer(db).append_model_call(
         kind="reply", model=reply.model, response=reply.text,
