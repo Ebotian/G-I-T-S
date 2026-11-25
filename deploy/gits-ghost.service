@@ -19,6 +19,9 @@ Group=gits
 WorkingDirectory=/srv/gits-runtime
 
 EnvironmentFile=/etc/gits.env
+# 夜间从自我域重选 A 段。开着——但 snapshot 自己有闸：
+# 候选没变就不重写（churn 不是变化，而且会把缓存前缀打碎）。
+Environment=GITS_PERSONA_APPLY=1
 ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
     --db /var/lib/gits/shared/gits.db ghost \
     --node cloud

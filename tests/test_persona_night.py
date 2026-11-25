@@ -202,9 +202,30 @@ def test_上一版会进候选_自己引用自己(db, monkeypatch) -> None:
     _self_node(db, "n:a", "他讨厌没有结论的会")
     _chat(monkeypatch, "第一版。")
     persona.snapshot(db, now=T0)
-    _chat(monkeypatch, "第二版。")
+    _self_node(db, "n:b", "他说想换个城市")      # 世界变了，才重写
     calls = _chat(monkeypatch, "第二版。")
     got = persona.snapshot(db, now=T0 + DAY)
-    assert any("第一版" in p["id"] or "第一版" in p["content"] for p in
-               [{"id": x, "content": x} for x in got.picked]) or \
-        "第一版" in calls[0][0]["content"], "昨晚那版该在今天的输入里"
+    assert got is not None
+    assert "第一版" in calls[0][0]["content"], "昨晚那版该在今天的输入里"
+
+
+def test_输入没变就不重写(db, monkeypatch) -> None:
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "第一版。")
+    assert persona.snapshot(db, now=T0) is not None
+    calls = _chat(monkeypatch, "第二版。")
+    assert persona.snapshot(db, now=T0 + DAY) is None, \
+        "候选一模一样，重写只会是同一段意思的另一种说法——那是 churn"
+    assert calls == []
+
+
+def test_候选变了就重写(db, monkeypatch) -> None:
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "第一版。")
+    persona.snapshot(db, now=T0)
+    _self_node(db, "n:b", "他说想换个城市")
+    _chat(monkeypatch, "第二版。")
+    got = persona.snapshot(db, now=T0 + DAY)
+    # 两个节点 + 上一版叙事（自反：昨晚那版今天还在输入里）
+    assert got is not None and len(got.picked) == 3
+    assert any("persona" in p for p in got.picked)

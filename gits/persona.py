@@ -123,7 +123,8 @@ def current(db: DB, *, actor: str = "her") -> dict | None:
         return None
     return {"event_id": int(row["id"]),
             "narrative": str(obj.get("narrative", "")),
-            "version": int(obj.get("version", 0))}
+            "version": int(obj.get("version", 0)),
+            "picked": list(obj.get("picked") or [])}
 
 
 def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
@@ -135,6 +136,11 @@ def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
         return None
 
     prev = current(db, actor=actor)
+    # **输入没变就别重写一遍。** 只有一个候选节点的夜里，重写出来的是
+    # 同一段意思的另一种说法——那是 churn，不是变化。
+    # 顺带保住了缓存：A 段逐字不变，前缀不用重建。
+    if prev and prev.get("picked") and prev["picked"] == [p["id"] for p in picked]:
+        return None
     version = (prev["version"] + 1) if prev else 0
     if prev and prev["narrative"]:
         # 上一版也在候选里（它是 self 域的一个节点），但保险起见补一句，
