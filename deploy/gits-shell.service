@@ -10,24 +10,23 @@ WatchdogSec=180
 Restart=always
 RestartSec=3
 
-User=gits
+# 只有主个体有对外通道——所以这个单元是 her 的，不是模板。
+User=her
 Group=gits
-# 工作目录是只读的运行目录：**所有写入都必须显式指向 /var/lib/gits**。
-# 上一版忘了这一点，FileChannel 去建相对路径 var/ ，撞上 Read-only file system。
 WorkingDirectory=/srv/gits-runtime
 
 ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli \
-    --db /var/lib/gits/gits.db shell \
-    --out /var/lib/gits/outbox.jsonl \
-    --inbox /var/lib/gits/inbox.jsonl \
-    --weixin-state /var/lib/gits/weixin.json --node cloud
+    --db /var/lib/gits/shared/gits.db shell \
+    --out /var/lib/gits/shared/outbox.jsonl \
+    --inbox /var/lib/gits/shared/inbox.jsonl \
+    --weixin-state /var/lib/gits/her/weixin.json --node cloud
 
 InaccessiblePaths=/srv/gits
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-ReadWritePaths=/var/lib/gits
+ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her
 
 MemoryMax=150M
 Nice=5

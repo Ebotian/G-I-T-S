@@ -1,36 +1,42 @@
 #!/usr/bin/env bash
 # G-I-T-S 在 ECS 上的部署。幂等，可以反复跑。
 #
-# 核心的一条：**实例读不到设计仓库**。
+# 两条硬规矩：
 #
-#   /srv/gits          0700 root:root   仓库 + docs + .git（只有人能看）
-#   /srv/gits-runtime  0755 root:root   运行用的一份拷贝：只有代码，没有 docs/.git/tests
-#   /var/lib/gits      0750 gits:gits   数据库 / 游标 / 凭据 / persona
+#   1. **实例读不到设计仓库**（/srv/gits 0700 root:root）
+#   2. **一个组，每个实例一个用户**——同组意味着能协作，不同用户意味着
+#      "哪个进程写了什么"是确定的，各自的私有目录互相进不去。
 #
-# 三层拦截（文件权限 + systemd InaccessiblePaths + 非 root 身份），
-# 外加 gits/containment.py 的自检——它不拦，只在失效时说一句。
+# 目录：
+#   /srv/gits              0700 root:root   仓库 + docs + .git（只有人能看）
+#   /srv/gits-runtime      0755 root:root   只有代码的一份拷贝
+#   /var/lib/gits/shared   2770 root:gits   共享的库与投递箱（同组可写，setgid 保组）
+#   /var/lib/gits/<actor>  0700 <actor>:gits 各自的私有目录（凭据、persona、游标）
 set -euo pipefail
 
 REPO="${GITS_REPO:-https://github.com/Ebotian/G-I-T-S.git}"
 SRC="${GITS_SRC:-/srv/gits}"
 RUN="${GITS_RUN:-/srv/gits-runtime}"
 DATA="${GITS_DATA:-/var/lib/gits}"
-USER_NAME="${GITS_USER:-gits}"
+GROUP="${GITS_GROUP:-gits}"
+ACTORS="${GITS_ACTORS:-her peer1 peer2}"
+MAIN="${GITS_MAIN:-her}"
 EXTRA="${GITS_EXTRA:-dream}"
 
 command -v uv >/dev/null || pip3 install -q uv
-
-# 阿里云 → GitHub 的 HTTP/2 会间歇性 "Error in the HTTP2 framing layer"，
-# 表现是 git fetch 随机失败。钉到 HTTP/1.1 之后好一些（但不是万能药，见 ecs.md §4.1）。
 git config --global http.version HTTP/1.1 || true
 git config --global http.postBuffer 524288000 || true
 
-# ── 1. 实例的身份 ──────────────────────────────────────────
-if ! id -u "$USER_NAME" >/dev/null 2>&1; then
-  useradd --system --home-dir "$DATA" --shell /usr/sbin/nologin \
-          --user-group "$USER_NAME"
-  echo "已创建用户 $USER_NAME（系统用户，不能登录）"
-fi
+# ── 1. 一个组，每个实例一个用户 ────────────────────────────
+getent group "$GROUP" >/dev/null || groupadd --system "$GROUP"
+for a in $ACTORS; do
+  if ! id -u "$a" >/dev/null 2>&1; then
+    # 主组就是这个共享组：同组可协作，但每个进程的身份是确定的
+    useradd --system --gid "$GROUP" --home-dir "$DATA/$a" \
+            --shell /usr/sbin/nologin "$a"
+    echo "已创建实例用户 $a（组 $GROUP，不能登录）"
+  fi
+done
 
 # ── 2. 源码（只有人能看） ─────────────────────────────────
 if [ -d "$SRC/.git" ]; then
@@ -48,27 +54,42 @@ rsync -a --delete \
       "$SRC/gits/" "$RUN/gits/"
 cp -f "$SRC/pyproject.toml" "$RUN/"
 [ -f "$SRC/uv.lock" ] && cp -f "$SRC/uv.lock" "$RUN/"
-
-# uv 不读 pip.conf，得单独给镜像
 export UV_INDEX_URL="${UV_INDEX_URL:-http://mirrors.cloud.aliyuncs.com/pypi/simple/}"
 ( cd "$RUN" && uv sync --extra "$EXTRA" --no-editable --quiet )
 
-# ── 4. 数据（实例可读写，人也能看） ───────────────────────
-mkdir -p "$DATA"
+# ── 4. 数据：共享 + 各自私有 ──────────────────────────────
+mkdir -p "$DATA/shared"
+chown root:"$GROUP" "$DATA" "$DATA/shared"
+chmod 0750 "$DATA"
+chmod 2770 "$DATA/shared"          # setgid：新建文件自动继承组，不会变成孤零零的私有
+
+# 旧版把所有东西都堆在 var/ 下，按用途搬过去（幂等：目标已存在就不动）
 if [ -d "$SRC/var" ]; then
-  # 幂等：只在目标还缺文件时搬，跑第二遍不会覆盖掉线上的库
   for f in "$SRC"/var/*; do
     [ -e "$f" ] || continue
     base="$(basename "$f")"
-    [ -e "$DATA/$base" ] || cp -a "$f" "$DATA/$base"
+    case "$base" in
+      gits.db*|outbox.jsonl|inbox.jsonl) dest="$DATA/shared/$base" ;;
+      *)                                dest="$DATA/$MAIN/$base" ;;
+    esac
+    [ -e "$dest" ] || cp -a "$f" "$dest"
   done
 fi
-chown -R "$USER_NAME:$USER_NAME" "$DATA"
-chmod 0750 "$DATA"
 
-# 密钥：人和实例读得到，其他人不行
+# 每个实例的私有目录：只有它自己能进
+for a in $ACTORS; do
+  mkdir -p "$DATA/$a"
+  chown "$a:$GROUP" "$DATA/$a"
+  chmod 0700 "$DATA/$a"
+done
+chown -R root:"$GROUP" "$DATA/shared"
+find "$DATA/shared" -type f -exec chmod 0660 {} + 2>/dev/null || true
+find "$DATA/shared" -type d -exec chmod 2770 {} + 2>/dev/null || true
+chown -R "$MAIN:$GROUP" "$DATA/$MAIN" 2>/dev/null || true
+
+# 密钥：需要它的实例能读，其他人不行
 if [ -f /etc/gits.env ]; then
-  chown root:"$USER_NAME" /etc/gits.env
+  chown root:"$GROUP" /etc/gits.env
   chmod 0640 /etc/gits.env
 fi
 
@@ -90,25 +111,7 @@ systemctl daemon-reload
 echo "已部署 $(git -C "$SRC" log --oneline -1)"
 echo "  仓库   $SRC  (0700 root:root，实例不可达)"
 echo "  运行   $RUN  ($("$RUN/.venv/bin/python" -V 2>&1))"
-echo "  数据   $DATA ($USER_NAME)"
+echo "  共享   $DATA/shared  (2770 root:$GROUP)"
+echo "  实例   $(for a in $ACTORS; do printf '%s ' "$a"; done)"
 echo
-"$RUN/.venv/bin/python" -m gits.containment 2>/dev/null || \
-  "$RUN/.venv/bin/python" -c "from gits.containment import check; print(check().line())"
-
-echo
-echo "隔离验收（任何一条失败都是失败）："
-if sudo -u "$USER_NAME" test -r "$SRC/docs/DESIGN.md" 2>/dev/null; then
-  echo "  ✗ $USER_NAME 能读设计文档"
-else
-  echo "  ✓ $USER_NAME 读不到 $SRC/docs/DESIGN.md"
-fi
-if sudo -u "$USER_NAME" test -x "$SRC" 2>/dev/null; then
-  echo "  ✗ $USER_NAME 能进 $SRC 目录"
-else
-  echo "  ✓ $USER_NAME 进不去 $SRC 目录"
-fi
-if sudo -u "$USER_NAME" test -r "$DATA/gits.db" 2>/dev/null; then
-  echo "  ✓ $USER_NAME 读得到自己的库"
-else
-  echo "  ? 还没有库（首次部署正常）"
-fi
+bash "$SRC/deploy/verify_containment.sh" || true

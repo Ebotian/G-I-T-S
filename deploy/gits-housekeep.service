@@ -5,8 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-# 跑成实例自己的身份：家务也不该顺手读到设计仓库
-User=gits
+User=her
 Group=gits
 WorkingDirectory=/srv/gits-runtime
 InaccessiblePaths=/srv/gits
@@ -14,12 +13,10 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-ReadWritePaths=/var/lib/gits
+ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her
 
-# replay 是恢复重放：清空投影，只用日志集重建。
-# 它同时是一次免费的重放回归测试——重建失败就说明不变量坏了。
-ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/gits.db replay --restore
-ExecStartPost=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/gits.db status
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db replay --restore
+ExecStartPost=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db status
 Nice=10
 IOSchedulingClass=idle
 MemoryMax=400M
