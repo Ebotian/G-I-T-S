@@ -127,9 +127,30 @@ class Shell:
                 )
                 if created:
                     n += 1
+                    self._remember(item, ch.name, t)
                     self._link_reply(t)
         self._last_poll = t
         return n
+
+    def _remember(self, item: dict, channel: str, t: int) -> None:
+        """记住这条消息的 context_token。
+
+        没有它，回复挂不到会话上——而它只在**收到消息的那一刻**存在，
+        过时不候。所以收到就存，不等要发的时候再找。
+        """
+        actor = item.get("from") or item.get("actor_id")
+        if not actor:
+            return
+        with self.w.txn() as c:
+            c.execute(
+                "INSERT INTO contacts(actor_id, channel, last_context_token,"
+                " last_seen, last_text) VALUES(?,?,?,?,?)"
+                " ON CONFLICT(actor_id) DO UPDATE SET"
+                " last_context_token=excluded.last_context_token,"
+                " last_seen=excluded.last_seen, last_text=excluded.last_text",
+                (actor, channel, item.get("context_token"), t,
+                 str(item.get("text", ""))[:200]),
+            )
 
     def _link_reply(self, t: int) -> None:
         """把这次回复挂到最近一条已发出的 outbox 上。

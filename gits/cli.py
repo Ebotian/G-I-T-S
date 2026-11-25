@@ -146,15 +146,29 @@ def cmd_shell(args: argparse.Namespace) -> int:
                               once=args.once))
 
 def cmd_say_out(args: argparse.Namespace) -> int:
-    """往 outbox 里塞一条，用来手工验证投递链路。"""
+    """往 outbox 里塞一条，用来手工验证投递链路。
+
+    带 `--weixin` 时从 contacts 表取 `context_token`——**回复必须原样带回**，
+    否则消息挂不到会话上。
+    """
     with _open(args) as db:
+        meta = {}
+        if args.weixin:
+            row = db.one("SELECT actor_id, last_context_token FROM contacts"
+                         " WHERE channel='weixin' ORDER BY last_seen DESC LIMIT 1")
+            if row is None:
+                print("还没有收到过微信消息，拿不到 context_token", file=sys.stderr)
+                return 1
+            meta = {"to": row["actor_id"], "context_token": row["last_context_token"]}
         w = Writer(db)
         with w.txn() as c:
             cur = c.execute(
-                "INSERT INTO outbox(ts, channel, text, status) VALUES(?,?,?, 'pending')",
-                (now_ms(), args.channel, args.text))
-            print(json.dumps({"outbox_id": cur.lastrowid,
-                              "channel": args.channel}, ensure_ascii=False))
+                "INSERT INTO outbox(ts, channel, text, status, meta)"
+                " VALUES(?,?,?, 'pending', ?)",
+                (now_ms(), args.channel, args.text,
+                 json.dumps(meta, ensure_ascii=False) if meta else None))
+            print(json.dumps({"outbox_id": cur.lastrowid, "channel": args.channel,
+                              "to": meta.get("to")}, ensure_ascii=False))
     return 0
 
 
@@ -371,6 +385,8 @@ def build_parser() -> argparse.ArgumentParser:
     so = sub.add_parser("say-out", help="手工往 outbox 塞一条")
     so.add_argument("text")
     so.add_argument("--channel", default="desk_audio")
+    so.add_argument("--weixin", action="store_true",
+                    help="从 contacts 取 context_token，走微信发")
     so.set_defaults(fn=cmd_say_out)
 
     ib = sub.add_parser("inbox", help="模拟他回了一句")
