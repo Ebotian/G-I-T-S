@@ -160,10 +160,41 @@ class Shell:
         return did
 
 
-async def serve(db_path: str | Path, *, out_file: str | Path, in_file: str | Path,
+class WeixinAdapter:
+    """把微信通道包成 Channel：顺手启动/停止它的后台轮询线程。"""
+
+    name = "weixin"
+
+    def __init__(self, account, *, cursor_path=None) -> None:
+        from gits.channels.weixin import WeixinChannel
+
+        self.inner = WeixinChannel(account, cursor_path=cursor_path)
+
+    def start(self) -> None:
+        self.inner.start()
+
+    def stop(self) -> None:
+        self.inner.stop()
+
+    def deliver(self, row: dict) -> tuple[str, str]:
+        return self.inner.deliver(row)
+
+    def poll(self) -> list[dict]:
+        return self.inner.poll()
+
+
+async def serve(db_path: str | Path, *, channels: list | None = None,
+                out_file: str | Path | None = None,
+                in_file: str | Path | None = None,
                 node: str = "cloud", once: bool = False) -> int:
     db = DB(db_path)
-    shell = Shell(db=db, channels=[FileChannel(out_file, in_file)], node=node)
+    chans = list(channels or [])
+    if out_file and in_file:
+        chans.append(FileChannel(out_file, in_file))
+    shell = Shell(db=db, channels=chans, node=node)
+    for c in chans:
+        if hasattr(c, "start"):
+            c.start()
 
     def _stop(*_: object) -> None:
         shell.stopped = True
@@ -186,5 +217,8 @@ async def serve(db_path: str | Path, *, out_file: str | Path, in_file: str | Pat
             await asyncio.sleep(max(0.0, 1.0 - (time.monotonic() - t0)))
     finally:
         sd_notify("STOPPING=1")
+        for c in shell.channels:
+            if hasattr(c, "stop"):
+                c.stop()
         db.close()
     return 0

@@ -129,8 +129,12 @@ class WeixinClient:
             msg["context_token"] = context_token
         return self._request("ilink/bot/sendmessage", body={"msg": msg})
 
-    def get_config(self) -> dict:
-        return self._request("ilink/bot/getconfig", body={})
+    def get_config(self, ilink_user_id: str, context_token: str | None = None) -> dict:
+        """typing_ticket 要按收件人取。空 body 会返回空——踩过。"""
+        body: dict = {"ilink_user_id": ilink_user_id}
+        if context_token:
+            body["context_token"] = context_token
+        return self._request("ilink/bot/getconfig", body=body)
 
     def send_typing(self, user_id: str, ticket: str, status: int = 1) -> dict:
         return self._request("ilink/bot/sendtyping",
@@ -161,11 +165,15 @@ class WeixinChannel:
 
     name = "weixin"
 
-    def __init__(self, account: Account, *, poll_timeout: float = 40.0) -> None:
+    def __init__(self, account: Account, *, cursor_path: str | Path | None = None,
+                 poll_timeout: float = 40.0) -> None:
         self.account = account
         self.client = WeixinClient(account)
         self.inbox: queue.Queue[dict] = queue.Queue()
-        self._buf = ""
+        # ★ 游标必须落盘。服务端只把"新"的消息给你，不写游标就等于丢消息——
+        # 重启一次，上一轮收到的那些就再也拿不回来了（官方包也存这个文件）。
+        self.cursor_path = Path(cursor_path) if cursor_path else None
+        self._buf = self._load_cursor()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._poll_timeout = poll_timeout
@@ -180,6 +188,22 @@ class WeixinChannel:
     def stop(self) -> None:
         self._stop.set()
 
+    def _load_cursor(self) -> str:
+        if not self.cursor_path or not self.cursor_path.exists():
+            return ""
+        try:
+            return str(json.loads(self.cursor_path.read_text(encoding="utf-8"))
+                       .get("get_updates_buf") or "")
+        except (json.JSONDecodeError, OSError):
+            return ""
+
+    def _save_cursor(self) -> None:
+        if not self.cursor_path:
+            return
+        self.cursor_path.parent.mkdir(parents=True, exist_ok=True)
+        self.cursor_path.write_text(json.dumps({"get_updates_buf": self._buf}),
+                                    encoding="utf-8")
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
@@ -192,8 +216,9 @@ class WeixinChannel:
                 time.sleep(1)
                 continue
             buf = resp.get("get_updates_buf")
-            if buf:
+            if buf and buf != self._buf:
                 self._buf = buf
+                self._save_cursor()
             for msg in resp.get("msgs") or []:
                 if msg.get("message_type") != MSG_USER:
                     continue

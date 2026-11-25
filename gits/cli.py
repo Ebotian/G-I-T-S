@@ -124,13 +124,26 @@ def cmd_shell(args: argparse.Namespace) -> int:
     """通道。往外投递 outbox，往里收消息。"""
     import asyncio as _asyncio
 
-    from .shell import serve
+    from .shell import FileChannel, WeixinAdapter, serve
+
+    channels = []
+    if args.weixin_state:
+        from .channels.weixin import Account
+
+        acct = Account.load(args.weixin_state)
+        channels.append(WeixinAdapter(acct,
+                                      cursor_path=Path(args.weixin_state).with_suffix(".cursor.json")))
+        print(f"微信通道已挂载：{acct.user_id}", file=sys.stderr)
+    if args.out:
+        channels.append(FileChannel(args.out, args.inbox))
+    if not channels:
+        print("没有可用通道", file=sys.stderr)
+        return 1
 
     with _open(args):
         pass
-    return _asyncio.run(serve(args.db, out_file=args.out, in_file=args.inbox,
-                              node=args.node, once=args.once))
-
+    return _asyncio.run(serve(args.db, channels=channels, node=args.node,
+                              once=args.once))
 
 def cmd_say_out(args: argparse.Namespace) -> int:
     """往 outbox 里塞一条，用来手工验证投递链路。"""
@@ -350,6 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
     sh = sub.add_parser("shell", help="通道（投递 + 收消息）")
     sh.add_argument("--out", default="var/outbox.jsonl")
     sh.add_argument("--inbox", default="var/inbox.jsonl")
+    sh.add_argument("--weixin-state", default=None, help="挂了微信通道的凭据文件")
     sh.add_argument("--node", default="cloud")
     sh.add_argument("--once", action="store_true")
     sh.set_defaults(fn=cmd_shell)
