@@ -67,6 +67,9 @@ class Query:
     answer: str
     candidates: tuple[str, ...]
     reason: str = "recent"      # 'recent' | 'strong'
+    #: 问这句话之前，刚刚聊过什么。**指代是靠上下文解析的，不是靠记忆库**——
+    #: 「上次那个跟你较劲的事」之所以说得通，是因为上一句还在聊它。
+    context: str = ""
 
 
 @dataclass
@@ -199,11 +202,18 @@ def generate(*, days: int = 90, seed: int = 7, start: int = 1_800_000_000_000,
         cnt = {f.id: len([m for m in fs.mentions
                           if m.fact == f.id and m.ts < qt]) for f in alive}
         reason = "strong" if max(cnt, key=cnt.get) == answer else "recent"
+        # 上下文：问之前刚聊过的两条（同实体的最近提及）
+        prior = [m for m in fs.mentions if m.ts < qt and m.fact in {f.id for f in alive}]
+        prior = sorted(prior, key=lambda m: -m.ts)[:2]
+        ctx = " ".join(f"{by_id[m.fact].entity} {by_id[m.fact].predicate} "
+                       f"{by_id[m.fact].value}" for m in prior)
+
         fs.queries.append(Query(
             ts=qt, entity=fact.entity,
             text=f"{INDIRECT[int(rng.integers(len(INDIRECT)))]}，"
                  f"{PHRASES[int(rng.integers(len(PHRASES)))]}",
             answer=answer, candidates=tuple(f.id for f in alive), reason=reason,
+            context=ctx,
         ))
 
     fs.params = {
