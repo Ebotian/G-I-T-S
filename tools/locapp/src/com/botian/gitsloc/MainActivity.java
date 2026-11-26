@@ -120,6 +120,9 @@ public class MainActivity extends Activity {
      */
     private void applyIntent(Intent in, EditText url, EditText secret) {
         if (in == null) return;
+        android.util.Log.i("gitsloc", "intent start=" + in.getBooleanExtra("start", false)
+                + " once=" + in.getBooleanExtra("once", false)
+                + " secret=" + (in.getStringExtra("secret") != null));
         if (in.getStringExtra("secret") != null) {
             Cfg.save(this, in.getStringExtra("url") == null
                             ? Cfg.DEFAULT_URL : in.getStringExtra("url"),

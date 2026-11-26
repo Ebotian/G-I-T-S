@@ -205,17 +205,32 @@ class _Server(ThreadingHTTPServer):
 
     def get_request(self):
         sock, addr = super().get_request()
-        if self.ctx is None:
-            return sock, addr
-        try:
-            return self.ctx.wrap_socket(sock, server_side=True), addr  # type: ignore
-        except Exception as exc:
-            _log(f"TLS 握手失败 from {addr[0]}: {exc!r}")
+        # 每条连接 10 秒内必须把手握完，否则放弃——不能让人占着线程。
+        sock.settimeout(10.0)
+        return sock, addr
+
+    def finish_request(self, request, client_address) -> None:
+        """TLS 握手在**工作线程**里做。
+
+        早先放在 get_request()（accept 循环里）——那是个真 bug：
+        一个卡住的客户端会把整个监听器堵死，后面的连接全部排队，
+        客户端看到的就是 connection reset / SSL handshake 失败。
+        表现出来像是'网络时好时坏'，其实是我们自己只肯一次握一只手。
+        """
+        if self.ctx is not None:
             try:
-                sock.close()
-            except OSError:
-                pass
-            raise
+                request = self.ctx.wrap_socket(request, server_side=True)  # type: ignore
+            except Exception as exc:
+                _log(f"TLS 握手失败 from {client_address[0]}: {exc!r}")
+                try:
+                    request.close()
+                except OSError:
+                    pass
+                return
+        try:
+            super().finish_request(request, client_address)
+        except Exception as exc:
+            _log(f"处理失败 from {client_address[0]}: {exc!r}")
 
     def handle_error(self, request, client_address) -> None:
         # 握手失败是**预期内**的（有人在扫端口），不该打整段 traceback。
