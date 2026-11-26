@@ -52,11 +52,22 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"内容={json.dumps(state, ensure_ascii=False) if state else '{}（干净）'}"
         )
         # 缓存命中率是**上线后第一个要看的数**：它掉下去的时候，别的东西都还正常。
-        from gits.speech import shape
-
         import time as _time
 
-        print(shape.line(db, now=int(_time.time() * 1000)))
+        from gits.core import backup
+        from gits.memory.extract import given_up
+        from gits.speech import shape
+
+        now = int(_time.time() * 1000)
+        print(shape.line(db, now=now))
+        # **失败要可见。**抽取失败以前只写进程内存，重启就没了；
+        # 放弃的消息不会再有记忆，但也没有任何地方说过这件事。
+        fails = db.scalar(
+            "SELECT count(*) FROM model_calls WHERE kind='extract_failed'"
+            " AND ts > ?", (now - 86_400_000,)) or 0
+        dead = len(given_up(db))
+        latest = backup.latest(backup.DEFAULT_DEST) or "（没有）"
+        print(f"抽取失败(24h)={fails} 放弃={dead} 上次备份={latest}")
         # **静默失败要显示。** 后台那几个 except 以前是哑的：
         # 天气挂了三天，系统表现得完全正常，只是从不出声。
         faults = db.q("SELECT ts, payload FROM events WHERE kind='fault'"
@@ -355,6 +366,28 @@ def cmd_world(args: argparse.Namespace) -> int:
         same = ip.get("adcode") == adcode
         print(f"  IP 定位：{ip.get('province')}{ip.get('city')}（{ip.get('adcode')}）"
               f"  {'与配置一致' if same else '与配置不符——IP 是机房位置，以配置为准'}")
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """做一份备份并验证它。**坏的备份比没有备份更危险。**"""
+    from gits.core import backup
+
+    args.dest = args.dest or backup.DEFAULT_DEST
+    args.keep = args.keep or backup.DEFAULT_KEEP
+    if args.verify:
+        ok, why = backup.verify(args.verify)
+        print(("  可用：" if ok else "  不能用：") + why)
+        return 0 if ok else 1
+
+    got = backup.run(args.db, dest=args.dest, keep=args.keep)
+    if not got["ok"]:
+        print(f"  备份失败：{got.get('error') or got.get('integrity')}")
+        return 1
+    print(f"  备份好了  {got['path']}")
+    print(f"  {got['bytes'] / 1024:.0f} KB · events={got['events']}"
+          f" · integrity={got['integrity']} · sha256 {got['sha256']}")
+    print(f"  最近一份：{backup.latest(args.dest)}")
     return 0
 
 
@@ -754,6 +787,11 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--monthly", type=float, default=200.0)
     q.add_argument("--balance", type=float, default=0.0)
     q.set_defaults(fn=cmd_quota)
+    bk = sub.add_parser("backup", help="做一份备份并验证它")
+    bk.add_argument("--dest", default=None)
+    bk.add_argument("--keep", type=int, default=None)
+    bk.add_argument("--verify", default=None, help="验一份已有的备份")
+    bk.set_defaults(fn=cmd_backup)
     sm = sub.add_parser("schema-manifest",
                         help="重新登记迁移指纹（只该在改老迁移时用）")
     sm.set_defaults(fn=cmd_schema_manifest)

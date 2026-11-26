@@ -243,8 +243,16 @@ class Ghost:
             self.fault("initiative_sched", exc, now=t)
             nxt, why_next = t + 60 * 60_000, "排期失败，退到一小时"
         self._next_initiative = max(t + 60_000, nxt)
+        # **通道状态要真的传进去。** gate 里那道"没有可用的出口"
+        # 以前永远不触发：默认参数是 True，而调用方从来不传。
+        from gits.io.delivery import channel_ready
+
+        # 判据是结果（有没有联系人、有没有攒着发不出去的东西），不是心跳。
+        # 注意这里**不提前 return**：gate 会带着 reason 拒绝，那条 reason
+        # 是事后复盘唯一的抓手。多一道 return 只是多一条会被改坏的分支。
+        ready, why_ready = channel_ready(self.db, now=t)
         try:
-            got = I.check(self.db, now=t)
+            got = I.check(self.db, now=t, channel_online=ready)
         except Exception as exc:
             self.fault("initiative", exc, now=t)
             return ""
@@ -476,6 +484,10 @@ class Ghost:
                 n += 1
             except Exception as exc:                 # 解析失败不能带走进程
                 self.last_error = f"extract {ev['id']}: {type(exc).__name__}: {exc}"
+                # **静默失败要显示。**以前这里只写进程内存里的 last_error：
+                # 重启就没了，status 也看不到——抽取挂了一整天，系统表现得完全正常，
+                # 只是她什么都没记住。
+                self.fault("extract", exc, now=now_ms() if t is None else t)
         return n
 
     def reply(self, t: int | None = None) -> int:

@@ -138,6 +138,21 @@ def pending(db: DB, *, limit: int = 5) -> list[dict]:
         " ORDER BY e.id LIMIT ?", (MAX_TRIES, limit))]
 
 
+def given_up(db: DB) -> list[dict]:
+    """抽了 MAX_TRIES 次都失败、而且没有 extract 的消息。**它们不会再有记忆了。**
+
+    没有这个查询，这些消息就是静默消失的：消息在库里、回话也回过了，
+    但图上一个节点都没有——她"忘了"这件事，而没有任何地方说明为什么。
+    """
+    return [dict(r) for r in db.q(
+        "SELECT e.* FROM events e WHERE e.kind IN ('msg_in','inner')"
+        " AND NOT EXISTS (SELECT 1 FROM model_calls m WHERE m.kind='extract'"
+        "                 AND m.event_id=e.id)"
+        " AND (SELECT count(*) FROM model_calls m2 WHERE m2.kind='extract_failed'"
+        "      AND m2.event_id=e.id) >= ?"
+        " ORDER BY e.id", (MAX_TRIES,))]
+
+
 def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
             thinking: bool = True, effort: str = "high",
             ts: int | None = None) -> Extracted:

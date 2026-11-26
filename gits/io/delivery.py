@@ -37,6 +37,36 @@ class Dispatch:
         return " ".join(parts) or "无"
 
 
+#: 一条 pending 超过这么久还没发出去，就当通道堵了。
+#: 取 30 分钟：expire 的 TTL 是 10 分钟（那是「这条彻底发不出去了」），
+#: 这里是「现在别再生新的」——两件事，两个数。
+STALE_MS = 30 * 60_000
+
+
+def channel_ready(db: DB, *, now: int | None = None,
+                  stale_ms: int = STALE_MS) -> tuple[bool, str]:
+    """通道现在能不能用。**返回理由，不只是布尔。**
+
+    判据是**结果**，不是心跳：有没有联系人、有没有攒着发不出去的东西。
+    没有主见的时候一律放行——「不知道」不等于「断了」，和互惠系数一个口径。
+
+    这以前是空的：gate 里有一道 if not i.channel_online，但没有任何调用方
+    传过这个参数，默认恒为 True。微信挂掉的时候她照样一次次决定要开口、
+    一次次调模型。
+    """
+    now = now if now is not None else now_ms()
+    row = db.one("SELECT actor_id FROM contacts LIMIT 1")
+    if row is None:
+        return (False, "通道不认识收件人")
+    stuck = db.one(
+        "SELECT ts FROM outbox WHERE status='pending'"
+        " AND ts < ? ORDER BY ts LIMIT 1", (now - stale_ms,))
+    if stuck is not None:
+        mins = (now - int(stuck["ts"])) // 60_000
+        return (False, f"积压堵了 {mins} 分钟，先别再生新的")
+    return (True, "")
+
+
 def claim(db: DB, *, now: int | None = None, limit: int = 20,
           lease_ms: int = 60_000,
           names: set[str] | frozenset[str] | None = None) -> list[dict]:

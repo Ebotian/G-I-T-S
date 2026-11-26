@@ -19,6 +19,9 @@ ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her
 # 对正在用的库直接跑会丢掉尚未发出的回复（旧版还会让所有旧消息重新变成待回复，
 # 于是重答、重发、重复付费）。真需要恢复时手工跑 replay --restore。
 ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db replay --shadow
+# **备份是独立的一步，不是 replay 的副产品。**
+# replay --shadow 校验的是"日志能不能重建投影"，库文件坏了它照样坏。
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db backup
 ExecStartPost=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db status
 Nice=10
 IOSchedulingClass=idle
