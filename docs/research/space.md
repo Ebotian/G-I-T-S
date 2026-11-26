@@ -271,3 +271,35 @@ Cloudflare 那边 A 记录必须是**灰云（DNS only）**。橙云会把流量
 
 这也是为什么 do_POST 里那个 except 只回 404 不打印：对外不回内容是对的，
 但调试时必须能从服务端日志看到。现在这条没有日志——**是个待补的洞**。
+
+## 15. 切换到 APK：Termux 那条已经停了
+
+    停掉的做法（可逆）：
+      mv ~/.termux/boot/01-gits-loc.sh  ~/gits-loc-boot.sh.disabled    # 开机不复活
+      am force-stop com.termux                                          # 停当前循环
+
+脚本都留着，.disabled 后缀只是挪出了 boot 目录。要回退就挪回去、重启手机。
+
+### 为什么必须停
+
+两条通道同时跑的那十几分钟里，账上出现了同一秒的两条：
+
+    id=10  ts=1795680350410  cached=True     <- app，用的 last-known
+    id=11  ts=1795680350339  cached=False    <- Termux
+
+坐标差几米、时间差 71 毫秒，**幂等键不同，所以两条都落了**。它们都「对」，
+但轨迹上多了一个点。这类重复不会报错，只会让后面所有基于计数的东西慢慢偏。
+
+### 切换验证
+
+停掉 Termux 之后手动触发一次 app：
+
+    id=12  ts=1795680948366  cached=False    <- app 自己的新定位
+
+### 保底留了什么
+
+    SSH 受限命令     /root/.ssh/authorized_keys 里那条 gits-phone 还在
+    phone 私钥       ~/.ssh/gits_ed25519 还在
+    脚本             gits-loc.sh / gits-loc-loop.sh 都在（只是不开机自启）
+
+app 出问题时，把 boot 脚本挪回去重启手机就能接上，不需要重新配任何东西。
