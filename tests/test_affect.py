@@ -82,3 +82,85 @@ def test_集中时说得干脆(db) -> None:
     for i in range(12):
         affect.observe(db, "her", angle="anger", intensity=2, ts=T0 + i)
     assert affect.line(db, "her", now=T0 + 12) == "最近偏生气。"
+
+
+# ── 连续转移 ─────────────────────────────────────────────────
+
+
+def test_强度先下来_不是直接消失(db) -> None:
+    affect.observe(db, "her", angle="anger", intensity=3, ts=T0)
+    later = affect.distribution(db, "her", now=T0 + HOUR)
+    # 一小时后：3 档少了一块，2 档长出来了
+    assert later["cells"][("anger", 3)] < 0.5
+    assert later["cells"][("anger", 2)] > 0.02
+
+
+def test_会向相邻角度扩散(db) -> None:
+    affect.observe(db, "her", angle="anger", intensity=2, ts=T0)
+    d = affect.distribution(db, "her", now=T0 + HOUR)
+    i = affect.ANGLES.index("anger")
+    left = affect.ANGLES[(i - 1) % len(affect.ANGLES)]
+    right = affect.ANGLES[(i + 1) % len(affect.ANGLES)]
+    assert d["cells"][(left, 2)] > d["prior"] * 1.5
+    assert d["cells"][(right, 2)] > d["prior"] * 1.5
+
+
+def test_对面不相邻(db) -> None:
+    affect.observe(db, "her", angle="anger", intensity=2, ts=T0)
+    d = affect.distribution(db, "her", now=T0 + HOUR)
+    assert d["cells"][("fear", 2)] == pytest.approx(d["prior"]), \
+        "圆盘的对角是反义，一步扩散到不了那里"
+
+
+def test_越激动走得越快(db) -> None:
+    low = affect.evolve({("anger", 2): 1.0}, HOUR, aroused=0.0)
+    high = affect.evolve({("anger", 2): 1.0}, HOUR, aroused=1.0)
+    assert high[("anger", 1)] > low[("anger", 1)], "同样一小时，激动的那个走得远"
+
+
+def test_流动不改变总量_只有衰减改变(db) -> None:
+    cells = {("anger", 3): 1.0}
+    moved = affect.evolve(cells, HOUR)
+    assert sum(moved.values()) == pytest.approx(1.0, abs=1e-9), "流动守恒"
+    cells2, _ = affect.advance(cells, HOUR)
+    assert sum(cells2.values()) < 1.0, "衰减才让它少"
+
+
+def test_加观测之前先推进_否则丢历史(db) -> None:
+    affect.observe(db, "her", angle="anger", intensity=3, ts=T0)
+    # 三小时后再来一条：旧的那条该已经走过一段，而不是原样堆着
+    affect.observe(db, "her", angle="joy", intensity=1, ts=T0 + 3 * HOUR)
+    d = affect.distribution(db, "her", now=T0 + 3 * HOUR)
+    assert d["cells"][("anger", 2)] > d["prior"], \
+        "旧的愤怒该已经降档，而不是停在 3 档"
+    assert d["top"] == ("joy", 1)
+
+
+def test_同一时刻问两次答案一样(db) -> None:
+    affect.observe(db, "her", angle="sadness", intensity=3, ts=T0)
+    a = affect.distribution(db, "her", now=T0 + 2 * HOUR)
+    b = affect.distribution(db, "her", now=T0 + 2 * HOUR)
+    assert a["cells"] == b["cells"]
+
+
+def test_读多少次都不会把状态改掉(db) -> None:
+    affect.observe(db, "her", angle="anger", intensity=3, ts=T0)
+    for _ in range(5):
+        affect.distribution(db, "her", now=T0 + HOUR)
+    # 状态是按 state_ts 存的，读只是投影，不会累积推进
+    assert db.scalar("SELECT ts FROM affect_state WHERE actor='her'") == T0
+
+
+def test_强度会一路降到最低档(db) -> None:
+    """只挪一格的写法会让质量卡在 2 档——24 小时后还在 2 档，那是错的。"""
+    moved = affect.evolve({("anger", 3): 1.0}, 24 * HOUR)
+    high = sum(v for (_a, inten), v in moved.items() if inten > 1)
+    # 严格为零是做不到的：Erlang 的 b·e^(−b) 在 b=16 时还有 1e-6。
+    # 要说的是「基本都下来了」，不是一个数都不许剩。
+    assert high < 1e-4, f"一天之后 2/3 档还留着 {high:.2g}"
+
+
+def test_强度衰减是级联不是单步(db) -> None:
+    half = affect.evolve({("anger", 3): 1.0}, int(0.5 * HOUR))
+    assert ("anger", 2) in half, "3 → 2"
+    assert half[("anger", 2)] < half[("anger", 3)], "刚开始还是 3 档为主"

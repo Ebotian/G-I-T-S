@@ -52,78 +52,174 @@ PRIOR_TOTAL = 2.0
 BUCKETS = len(ANGLES) * len(INTENSITIES) + 1
 
 
-def decay(now: int, last: int | None, *, tau_hours: float = TAU_HOURS) -> float:
-    if not last:
+# ── 连续转移：情绪在空间里是流动的，不是跳格 ──────────────────
+#
+# 一次观测落在某格只是推了一把。之后它自己走：
+#
+#   径向   3 → 2 → 1     强度先下来（暴怒 → 生气 → 不爽）
+#   环向   向相邻两格扩散（生气 → 不爽，或和相邻情绪混在一起）
+#
+# 两个都用时间常数写闭式解，**不做步进**：
+#
+#   k = 1 − e^(−dt/τ)
+#
+# 步进的话结果会依赖读取频率——同一时刻问两次可能不一样。
+#
+# 速度和幅度由语境定：**越激动，走得越快**。
+# arousal 直接从这个分布本身算（强度加权），不额外估一个量。
+
+#: 径向与环向的基础时间常数（小时）。arousal=1 时减半。
+TAU_RADIAL_H = 3.0
+TAU_CIRCULAR_H = 2.0
+
+
+def arousal(cells: dict[tuple[str, int], float]) -> float:
+    """0..1：现在有多激动。强度加权，不需要额外估计。"""
+    total = sum(cells.values())
+    if total <= 0:
+        return 0.0
+    return sum(v * (inten - 1) / 2.0 for (_a, inten), v in cells.items()) / total
+
+
+def evolve(cells: dict[tuple[str, int], float], dt_ms: int, *,
+           aroused: float | None = None) -> dict[tuple[str, int], float]:
+    """把状态往前推 dt。闭式解，不步进。
+
+    顺序：先强度下移（径向），再向相邻角度扩散（环向）。
+    两者都不改变总质量——只有 decay() 会。
+    """
+    if dt_ms <= 0:
+        return dict(cells)
+    hours = dt_ms / 3_600_000
+    ar = arousal(cells) if aroused is None else aroused
+    tau_r = TAU_RADIAL_H / (1.0 + ar)
+    tau_c = TAU_CIRCULAR_H / (1.0 + ar)
+    k_r = 1.0 - math.exp(-hours / tau_r)
+    k_c = 1.0 - math.exp(-hours / tau_c)
+
+    # 径向是 3→2→1 的**级联**，不能只挪一格：
+    # 只挪一格的话，24 小时之后的质量还停在 2 档（因为落在 2 档的那部分
+    # 在同一次调用里不会再往下走）。所以用 Erlang 的闭式解：
+    #
+    #   P(3→3) = a        P(3→2) = b·a        P(3→1) = 1 − a(1+b)
+    #   P(2→2) = a        P(2→1) = 1 − a        （1 档是吸收态）
+    a = math.exp(-hours / tau_r)
+    b = hours / tau_r
+    radial: dict[tuple[str, int], float] = {}
+    for angle in ANGLES:
+        m3 = cells.get((angle, 3), 0.0)
+        m2 = cells.get((angle, 2), 0.0)
+        m1 = cells.get((angle, 1), 0.0)
+        radial[(angle, 3)] = m3 * a
+        radial[(angle, 2)] = m3 * b * a + m2 * a
+        radial[(angle, 1)] = m3 * (1.0 - a * (1.0 + b)) + m2 * (1.0 - a) + m1
+
+    out: dict[tuple[str, int], float] = {}
+    n = len(ANGLES)
+    for (angle, inten), v in radial.items():
+        if k_c <= 1e-9 or v <= 0:
+            out[(angle, inten)] = out.get((angle, inten), 0.0) + v
+            continue
+        move = v * k_c
+        out[(angle, inten)] = out.get((angle, inten), 0.0) + v - move
+        i = ANGLES.index(angle)
+        for j in ((i - 1) % n, (i + 1) % n):
+            key = (ANGLES[j], inten)
+            out[key] = out.get(key, 0.0) + move / 2.0
+    return {k: v for k, v in out.items() if v > 1e-12}
+
+
+def decay(dt_ms: int, *, tau_hours: float = TAU_HOURS) -> float:
+    """纯衰减系数。情绪会散——这是它和记忆最大的区别。"""
+    if dt_ms <= 0:
         return 1.0
-    dt_hours = max(0, now - int(last)) / 3_600_000
-    return math.exp(-dt_hours / tau_hours)
+    return math.exp(-(dt_ms / 3_600_000) / tau_hours)
+
+
+def advance(cells: dict[tuple[str, int], float], dt_ms: int,
+            unknown: float = 0.0) -> tuple[dict[tuple[str, int], float], float]:
+    """把整个状态往前推 dt：先流动（径向+环向），再衰减。
+
+    一个函数，两处用：observe() 加新观测之前推一次，distribution() 读之前推一次。
+    两边用同一个函数，状态才会一致——分开写迟早会漂。
+    """
+    if dt_ms <= 0:
+        return dict(cells), unknown
+    moved = evolve(cells, dt_ms)
+    k = decay(dt_ms)
+    return ({c: v * k for c, v in moved.items() if v * k > 1e-12},
+            unknown * k)
+
+
+def _state(db: DB, actor: str) -> tuple[dict[tuple[str, int], float], int, float]:
+    rows = db.q('SELECT angle, intensity, weight FROM affect WHERE actor=?',
+                (actor,))
+    cells = {(str(r['angle']), int(r['intensity'])): float(r['weight'])
+             for r in rows}
+    st = db.one('SELECT ts, unknown FROM affect_state WHERE actor=?', (actor,))
+    if st is None:
+        return cells, 0, 0.0
+    return cells, int(st['ts']), float(st['unknown'])
+
+
+def _store(db: DB, actor: str, cells: dict[tuple[str, int], float],
+           unknown: float, ts: int) -> None:
+    with Writer(db).txn() as c:
+        c.execute('DELETE FROM affect WHERE actor=?', (actor,))
+        for (angle, inten), v in cells.items():
+            if v <= 1e-12:
+                continue
+            c.execute('INSERT INTO affect(actor, angle, intensity, weight)'
+                      ' VALUES(?,?,?,?)', (actor, angle, inten, v))
+        c.execute('INSERT INTO affect_state(actor, ts, unknown) VALUES(?,?,?)'
+                  ' ON CONFLICT(actor) DO UPDATE SET ts=?, unknown=?',
+                  (actor, ts, unknown, ts, unknown))
 
 
 def observe(db: DB, actor: str, *, angle: str | None, intensity: int = 2,
             ts: int, w: float = 1.0) -> None:
-    """记一次观测。**angle 不认识就记进 unknown**，不猜最近的格子。"""
-    if angle not in ANGLES or intensity not in INTENSITIES:
-        angle, intensity = None, 0
-    with Writer(db).txn() as c:
-        if angle is None:
-            row = c.execute("SELECT weight, last_ts FROM affect_unknown"
-                            " WHERE actor=?", (actor,)).fetchone()
-            kept = float(row[0]) * decay(ts, row[1]) if row else 0.0
-            c.execute("INSERT INTO affect_unknown(actor, weight, last_ts)"
-                      " VALUES(?,?,?) ON CONFLICT(actor) DO UPDATE SET"
-                      " weight=?, last_ts=?",
-                      (actor, kept + w, ts, kept + w, ts))
-            return
-        row = c.execute("SELECT weight, last_ts FROM affect"
-                        " WHERE actor=? AND angle=? AND intensity=?",
-                        (actor, angle, intensity)).fetchone()
-        kept = float(row[0]) * decay(ts, row[1]) if row else 0.0
-        c.execute("INSERT INTO affect(actor, angle, intensity, weight, last_ts)"
-                  " VALUES(?,?,?,?,?) ON CONFLICT(actor, angle, intensity)"
-                  " DO UPDATE SET weight=?, last_ts=?",
-                  (actor, angle, intensity, kept + w, ts, kept + w, ts))
+    """记一次观测。**先把这个状态推到 ts，再加**——顺序反了就丢历史。
+
+    angle 不认识就记进 unknown，不猜最近的格子（委屈、心酸、憋屈没有归属）。
+    """
+    cells, state_ts, unknown = _state(db, actor)
+    cells, unknown = advance(cells, ts - state_ts, unknown)
+    if angle in ANGLES and intensity in INTENSITIES:
+        key = (str(angle), int(intensity))
+        cells[key] = cells.get(key, 0.0) + w
+    else:
+        unknown += w
+    _store(db, actor, cells, unknown, ts)
 
 
 def distribution(db: DB, actor: str, *, now: int) -> dict:
-    """此刻的情绪分布。
+    """此刻的情绪分布（后验均值，含 Dirichlet 先验）。"""
+    cells, state_ts, unknown = _state(db, actor)
+    cells, unknown = advance(cells, now - state_ts, unknown)
 
-    返回 {cells: {(angle,intensity): p}, unknown: p_unknown, n: 有效观测数,
-          clarity: 0..1, top: (angle,intensity) | None}
-
-    **衰减在读的时候算**，和 edges 一样——所以同一个时刻问两次答案一样，
-    也不受"什么时候重放过"影响。
-    """
-    rows = db.q("SELECT angle, intensity, weight, last_ts FROM affect"
-                " WHERE actor=?", (actor,))
-    counts = {}
-    for r in rows:
-        v = float(r["weight"]) * decay(now, r["last_ts"])
-        if v > 1e-9:
-            counts[(str(r["angle"]), int(r["intensity"]))] = v
-    unk_row = db.one("SELECT weight, last_ts FROM affect_unknown WHERE actor=?",
-                     (actor,))
-    unk = (float(unk_row["weight"]) * decay(now, unk_row["last_ts"])) \
-        if unk_row else 0.0
-
-    n = sum(counts.values())
-    total = n + unk + PRIOR_TOTAL
+    n = sum(cells.values())
+    total = n + unknown + PRIOR_TOTAL
     if total <= 0:
-        return {"cells": {}, "unknown": 0.0, "n": 0.0, "clarity": 0.0,
-                "top": None}
+        return {'cells': {}, 'unknown': 0.0, 'n': 0.0, 'clarity': 0.0,
+                'top': None, 'prior': 0.0, 'arousal': 0.0}
 
-    cells = {k: (v + PRIOR_TOTAL / BUCKETS) / total for k, v in counts.items()}
-    # 没观测过的格子也有先验质量——它们不该在返回里"消失"，否则分布看着比实际确信
-    for angle in ANGLES:
-        for inten in INTENSITIES:
-            cells.setdefault((angle, inten), PRIOR_TOTAL / BUCKETS / total)
+    prior = PRIOR_TOTAL / BUCKETS
+    full = {(a, i): prior for a in ANGLES for i in INTENSITIES}
+    for k, v in cells.items():
+        full[k] = full.get(k, prior) + v
+    probs = {k: v / total for k, v in full.items()}
+    p_unknown = (unknown + prior) / total
 
-    ps = [p for p in cells.values()] + [(unk + PRIOR_TOTAL / BUCKETS) / total]
+    ps = list(probs.values()) + [p_unknown]
     h = -sum(p * math.log(p) for p in ps if p > 0)
-    hmax = math.log(len(ps))
-    clarity = max(0.0, 1.0 - h / hmax) if hmax > 0 else 0.0
-    top = max(cells, key=lambda k: cells[k]) if counts else None
-    return {"cells": cells, "unknown": (unk + PRIOR_TOTAL / BUCKETS) / total,
-            "n": n, "clarity": clarity, "top": top}
+    clarity = max(0.0, 1.0 - h / math.log(len(ps))) if len(ps) > 1 else 0.0
+    top = max(cells, key=lambda k: cells[k]) if cells else None
+    return {'cells': probs, 'unknown': p_unknown, 'n': n,
+            'clarity': clarity, 'top': top,
+            # 归一化后的先验：一个「没有任何证据」的格子应该是多少。
+            # 测试和调用方拿它当基准，比反推 PRIOR_TOTAL/total 可靠。
+            'prior': prior / total,
+            'arousal': arousal(cells)}
 
 
 def line(db: DB, actor: str, *, now: int) -> str:
