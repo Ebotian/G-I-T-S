@@ -102,12 +102,11 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
     from gits.social.affect import line as affect_line
     from gits.speech.style import line as style_line
-    from gits.world import amap, loc, places
+    # **常驻背景块**：每小时冻结一次，一小时内逐字节相同。
+    # 结构化的，不是句子——代码不写散文，代码给数据。
+    from gits.world import brief as B
 
-    # 外面这一行：他在哪 + 那里的天气。空的部分不出现。
-    # 场所**有名字**才说场所，没名字退回城市——不自动命名，所以大多数时候是城市。
-    where = places.line(db, now=now) or loc.line(db, now=now)
-    world = "\n".join(filter(None, (where, amap.line(db, now=now))))
+    world = B.freeze(db, now=now, actor=actor)
 
     return RelationSnapshot(
         bucket=bucket(now),
@@ -115,7 +114,8 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now),
         style=style_line(db, actor, now=now),
         # 失手也不影响说话：读数读不到就是空，不抛。
-        world=world)
+        world=world,
+        world_head=B.BRIEF_HEAD)
 
 
 def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:

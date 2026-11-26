@@ -1,0 +1,140 @@
+"""常驻背景块：**她此刻知道的，只有事实。**
+
+它在上下文里占一行头 + 一行 JSON。三件事决定它的形状：
+
+  ① **只放可核对的**
+     场所、城市、待了多久、外面什么天、这个点的常态。
+     预测（到达率、下一站）不进来——概率进了上下文就会变成话术
+     （"你好像不太想说话"），而那不是从他的意思里来的。
+
+  ② **每小时冻结**
+     "通常不变"和"保证不变"是两件事。冻结之后一小时内逐字节相同，
+     前缀才真的稳。冻结失败过一次：relation() 每轮重算，注释写着
+     "一小时内逐字不变"，实际每小时都可能变。
+
+  ③ **派生量不落库**
+     待了多久 = now - since，渲染时算，不写任何表、不进任何学习。
+     它在呈现上是事实，在统计上是**右删失**（这一趟还没结束），
+     所以永远不进停留时长分布。
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from gits.core.db import DB, Writer
+
+#: 待了多久的分桶。**不给分钟**——给了模型就会开始算钟点，
+#: 而墙钟只做参照层。分桶保留了"待挺久了"这个信息，丢掉了钟面。
+STAY_BUCKETS = ((30, "刚坐下"), (120, "待了一会儿"), (300, "待了挺久"),
+                (720, "待了大半天"), (10 ** 9, "一直在这儿"))
+
+#: 哪些字段变了才值得追加一条。其余（温度 ±1、湿度）不追加。
+SUBSTANTIVE = ("place", "usual", "weather")
+
+#: 背景块前面那一行。**顺序说明是必须的**：不写，模型会把两行快照读成
+#: 并列的两个选项（"你最近是不是搬家了"），而不是先后。
+BRIEF_HEAD = "# 你此刻知道的（每行是那一刻的状态，最后一行是现在；不用转述）"
+
+
+def _stay(minutes: float | None) -> str | None:
+    if minutes is None:
+        return None
+    for edge, word in STAY_BUCKETS:
+        if minutes < edge:
+            return word
+    return STAY_BUCKETS[-1][1]
+
+
+def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
+    """**纯函数，只读表。** 同一份数据 + 同一个小时 → 同一份结果。"""
+    from gits.social import affect
+    from gits.time import bin_of
+    from gits.world import amap, loc, places
+
+    out: dict[str, Any] = {}
+
+    cur = places.current(db, actor=actor)
+    if cur:
+        name = places.name_of(cur)
+        if name:
+            out["place"] = name
+        since = int(cur.get("since") or 0)
+        if since:
+            out["stay"] = _stay((now - since) / 60_000.0)
+
+    city = ""
+    r = loc.fresh(db, now=now)
+    if r:
+        city = (r.get("city") or "").strip()
+    if city:
+        out["city"] = city
+
+    w = amap.latest(db, now=now)
+    if w and not amap._stale(w, now=now, ttl=amap.FRESH_MS):
+        weather = (w.get("weather") or "").strip()
+        temp = w.get("temp")
+        if weather:
+            out["weather"] = weather
+        if isinstance(temp, (int, float)):
+            out["temp"] = int(round(temp))
+
+    d = affect.distribution(db, actor, now=now)
+    top = d.get("top")
+    if top and d.get("n", 0) >= 1.0:
+        angle, inten = top
+        word = affect.ZH.get((angle, inten), angle)
+        out["mood"] = word
+
+    # 这个点的常态：profile 里样本最多的那个场所。**可核对的事实，不是预测。**
+    hour = bin_of(now) % 24
+    best, best_n = None, 0
+    for p in places.real_places(db):
+        hits = places.profile(db, int(p["id"]))[hour]
+        if hits > best_n:
+            best, best_n = p, hits
+    if best is not None and best_n >= 3:
+        name = places.name_of(best)
+        if name and name != out.get("place"):
+            out["usual"] = name
+
+    return out
+
+
+def render(brief: dict[str, Any]) -> str:
+    """确定性序列化：键排序、无空格、不带时间戳。
+
+    **一个时间戳就能让后面全部失效**，所以这里不许出现任何"现在几点"。
+    """
+    if not brief:
+        return ""
+    return json.dumps(brief, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"))
+
+
+def freeze(db: DB, *, now: int, actor: str = "her") -> str:
+    """每小时一份基线。**这一小时内所有轮次复用同一份字节。**"""
+    bucket = now // 3_600_000
+    row = db.one("SELECT blob FROM brief_snapshot WHERE bucket=?", (bucket,))
+    if row is not None:
+        return str(row["blob"])
+    blob = render(build(db, now=bucket * 3_600_000, actor=actor))
+    if blob:
+        with Writer(db).txn() as c:
+            c.execute("INSERT INTO brief_snapshot(bucket, blob, created)"
+                      " VALUES(?,?,?) ON CONFLICT(bucket) DO NOTHING",
+                      (bucket, blob, now))
+        row = db.one("SELECT blob FROM brief_snapshot WHERE bucket=?", (bucket,))
+        if row is not None:
+            return str(row["blob"])
+    return blob
+
+
+def changes(prev: dict[str, Any], cur: dict[str, Any]) -> dict[str, Any]:
+    """只挑**实质**变化。温度 ±1 不算——那不改变任何决定。"""
+    out: dict[str, Any] = {}
+    for k in SUBSTANTIVE:
+        if cur.get(k) != prev.get(k) and cur.get(k) is not None:
+            out[k] = cur[k]
+    return out
