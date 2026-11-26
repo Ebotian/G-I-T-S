@@ -88,6 +88,9 @@ class GateInputs:
     #: 他这个时段通常在不在（0..1）。**是预测，不是门槛**——
     #: 它按比例削弱价值，不做"低于某值就不许说"的硬判断。
     presence: float | None = None
+    #: 之前主动开口没得到回复的累积惩罚系数（1.0 = 没欠）。
+    #: **允许重发**，但欠得越多越难再开口——罚的分量按当时的在线概率加权。
+    unanswered: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,8 @@ def open_value(i: GateInputs) -> float:
     # 0.2 是下限——即使他从不在这个点说话，也不是绝对不许，只是要非常有话说。
     if i.presence is not None:
         v *= 0.2 + 0.8 * max(0.0, min(1.0, i.presence))
+    # 欠回复：**允许重发，但欠得越多越难开口。**
+    v *= max(0.0, min(1.0, i.unanswered))
     # 动量：**正反馈**。说得密就更想开口，说得稀就更难开口。
     # 它自己带上界和限速（social/drive.py），所以这里不再夹一次。
     if i.drive is not None:

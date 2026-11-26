@@ -1,9 +1,10 @@
-"""主动开口：没有频率闸、没有时机闸，靠压力和预测。
+"""主动开口：压力按"闲的时间"积累，惩罚按"该回却没回"加权。
 
-四道"闸"只剩两道事实闸（出口、证据），另外两样是**连续量**：
-
-    压力   憋得越久门槛越低            → 频率自己长出来，不用规则去配
-    在场   预测值，按比例削弱价值        → 不做"低于 0.15 就不许说"
+四件事各有测试，每件对应一个具体的错法：
+  压力用墙钟        → 他在开会和他在闲着，被当成同一件事
+  惩罚不看在线概率   → 沉默被当成统一的负面信号
+  不允许重发        → 一句话石沉大海就再也不说了
+  到处采样          → 同一分钟内问两次得到不同答案，日志对不上
 """
 
 from __future__ import annotations
@@ -49,11 +50,11 @@ def _dangling(db: DB, name: str = "看病", *, times: int = 3,
     return eid
 
 
-def _presence(db: DB) -> None:
-    """每天 14-18 点他都说话。每条都标已回，免得变成积压。"""
+def _busy(db: DB, hours=(14, 15, 16, 17)) -> None:
+    """他只在 14-17 点说话。**每条都标已回**，免得变成积压。"""
     with Writer(db).txn() as c:
         for d in range(7):
-            for h in (14, 15, 16, 17):
+            for h in hours:
                 ts = T0 - d * 86_400_000 + (h - 15) * HOUR
                 cur = c.execute("INSERT INTO events(ts, recv_ts, source, kind,"
                                 " ext_id, payload, lag, ts_trust, scope)"
@@ -66,8 +67,82 @@ def _presence(db: DB) -> None:
                            f"replied:{cur.lastrowid}", 1, "world"))
 
 
+def test_压力积的是闲的时间不是墙钟(db) -> None:
+    """同样隔 3 小时，他在闲的时候攒得快，在忙的时候攒得慢。"""
+    _busy(db, hours=(14, 15, 16, 17))
+    morning = int(dt.datetime(2026, 11, 26, 10, 0).timestamp() * 1000)
+    I.record(db, now=morning - 3 * HOUR, reason="x", candidate=None)
+    idle_hours = I.pressure(db, now=morning)          # 07-10 点：他基本不说话
+    I.record(db, now=T0, reason="x", candidate=None)
+    busy_hours = I.pressure(db, now=T0 + 3 * HOUR)    # 15-18 点：他在说话
+    assert busy_hours > idle_hours, (idle_hours, busy_hours)
+
+
+def test_没回复的惩罚按当时在线概率加权(db) -> None:
+    """他在线却没回 → 罚得重；他本来就不在 → 罚得轻。"""
+    _busy(db)
+    # 03:00：他基本不在 → 沉默在预期里
+    quiet = int(dt.datetime(2026, 11, 26, 3, 0).timestamp() * 1000)
+    # 17:30：他在说话，而且之后六小时没有他的消息 → 沉默是意外
+    busy = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
+    I.record(db, now=quiet, reason="夜里说的", candidate=None)
+    I.record(db, now=busy, reason="白天说的", candidate=None)
+    factor, weight = I.unanswered(db, now=T0 + 10 * HOUR)
+    assert weight > 0
+    assert factor < 1.0, "白天的沉默没被罚"
+    # 只看夜里那一次：他基本不在，沉默完全在预期里 → 不该罚
+    only_night = I.unanswered(db, now=quiet + 8 * HOUR)[0]
+    assert only_night == pytest.approx(1.0), only_night
+    assert only_night > factor, "夜里的沉默不该和白天罚一样重"
+
+
+def test_允许重发但惩罚累积(db) -> None:
+    """一句话石沉大海就再也不说了，那是另一种坏。"""
+    _busy(db)
+    # 都挑 17:30：那时他在说话，之后六小时没有他的消息 → 每次都算欠
+    d1 = int(dt.datetime(2026, 11, 24, 17, 30).timestamp() * 1000)
+    d2 = int(dt.datetime(2026, 11, 25, 17, 30).timestamp() * 1000)
+    d3 = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
+    one = I.unanswered(db, now=d1)[0]
+    I.record(db, now=d1, reason="1", candidate=None)
+    two = I.unanswered(db, now=d2)[0]
+    I.record(db, now=d2, reason="2", candidate=None)
+    three = I.unanswered(db, now=d3)[0]
+    assert three < two < one, (one, two, three)
+    assert three > 0, "罚到零就永远不说了——那是饿死"
+
+
+def test_同一分钟内采样结果相同(db) -> None:
+    """只在决策时采样一次，而且种子固定：日志和重放对得上。"""
+    a = I.sample_value(0.4, actor="her", now=T0)
+    b = I.sample_value(0.4, actor="her", now=T0 + 30_000)
+    c = I.sample_value(0.4, actor="her", now=T0 + 90_000)
+    assert a == b, "同一分钟内两次采样不一致"
+    assert a != c, "跨分钟应该换一次抽样"
+
+
+def test_决策用的是采样值不是期望值(db) -> None:
+    """**只在最终决策时取一次值。** 之前全是分布，这里是一次抽样。"""
+    _dangling(db)
+    _busy(db)
+    vals = []
+    for i in range(30):
+        got = I.check(db, now=T0 + i * 60_000)
+        vals.append((got["value"], got["expected"]))
+    assert any(abs(v - e) > 1e-6 for v, e in vals), \
+        "value 和 expected 永远相等 —— 说明没采样，直接用了期望值"
+
+
+def test_采样围绕期望值抖(db) -> None:
+    xs = [I.sample_value(0.5, actor="her", now=T0 + i * 60_000)
+          for i in range(200)]
+    mean = sum(xs) / len(xs)
+    assert 0.35 < mean < 0.65, mean
+    assert len(set(round(x, 4) for x in xs)) > 100, "采样退化成常数了"
+
+
 def test_没有悬着的事就不说(db) -> None:
-    _presence(db)
+    _busy(db)
     got = I.check(db, now=T0)
     assert got["allow"] is False
     assert "悬着" in got["why"]
@@ -75,83 +150,15 @@ def test_没有悬着的事就不说(db) -> None:
 
 def test_憋久了就该开口(db) -> None:
     _dangling(db)
-    _presence(db)
+    _busy(db)
     got = I.check(db, now=T0)
     assert got["pressure"] == pytest.approx(1.0)
     assert got["allow"] is True, got["why"]
 
 
-def test_刚说完压力接近零门槛最高(db) -> None:
-    """**没有"每 3 小时一次"这种规则。** 压力≈0 → 门槛最高。"""
-    _dangling(db)
-    _presence(db)
-    I.record(db, now=T0 - 60_000, reason="刚说过", candidate="看病")
-    got = I.check(db, now=T0)
-    assert got["pressure"] < 0.01
-    assert "阈值" in got["why"], "应该是价值没超过门槛，不是被规则拦住"
-
-
-@pytest.mark.xfail(strict=True, reason="已标定：THRESHOLD=0.15 太低，"
-                                          "压力降门槛压不住高价值候选——"
-                                          "见 docs/research/autonomy.md 待标定")
-def test_频率应该由压力蕴含_目前还做不到(db) -> None:
-    """**已知缺口，不是通过项。**
-
-    用户的设计是：不加频率闸，靠"憋得越久门槛越低"让频率自己长出来。
-    但现在的常数下它长不出来：刚说完（压力≈0，门槛 0.15）时，
-    一个强候选的价值仍然是 0.30 左右，照样过线——等于一分钟就能再说一次。
-
-    要让这条成立，需要把 THRESHOLD 抬到 ~0.4（这样压力≈0 时 0.40 挡住 0.30，
-    憋满时 0.16 放行）。但那又要用真实数据标定，不能拍脑袋定。
-    所以：**先记成 xfail，等有真实交互再定标。**
-    """
-    _dangling(db)
-    _presence(db)
-    I.record(db, now=T0 - 60_000, reason="刚说过", candidate="看病")
-    assert I.check(db, now=T0)["allow"] is False
-
-
-def test_他不常在这个点说话_价值被削弱但不是很门槛(db) -> None:
-    """在场是**预测**，按比例削弱价值；不是"低于某值一律不许"。"""
-    _dangling(db)
-    _presence(db)
-    night = int(dt.datetime(2026, 11, 27, 3, 0).timestamp() * 1000)
-    got = I.check(db, now=night)
-    assert got["presence"] is not None and got["presence"] < 0.5
-    # 削弱体现在数值上：同样的证据，在夜里价值更低
-    day = I.check(db, now=T0)
-    assert got["value"] < day["value"], "在场低的时候价值没有被削弱"
-
-
-def test_连续开口会衰减价值(db) -> None:
-    """连续开口的衰减是 gate 里 SEND_DECAY 给的，不是外面加的规则。"""
-    _dangling(db)
-    _presence(db)
-    one = I.check(db, now=T0)
-    for i in range(3):
-        I.record(db, now=T0 - (i + 1) * 4 * HOUR, reason="连续", candidate=None)
-    three = I.check(db, now=T0)
-    # 三次连续之后压力已经满了，门槛最低；价值仍应因为 SEND_DECAY 掉下来
-    assert three["value"] <= one["value"] * 1.01, (one["value"], three["value"])
-
-
-def test_判定必须落事件才能计数(db) -> None:
-    _dangling(db)
-    _presence(db)
-    assert I.spoken(db) == []
-    I.record(db, now=T0 - 4 * HOUR, reason="说了", candidate="看病")
-    assert len(I.spoken(db)) == 1
-    assert I.pressure(db, now=T0) < 1.0
-
-
 def test_出口断了就不开口(db) -> None:
     _dangling(db)
-    _presence(db)
+    _busy(db)
     got = I.check(db, now=T0, channel_online=False)
     assert got["allow"] is False
     assert "出口" in got["why"]
-
-
-def test_没有数据也不当成禁令(db) -> None:
-    """空白不是"他一定不在"。没消息的时候在场返回 None，不否决。"""
-    assert I.presence(db, now=T0) is None
