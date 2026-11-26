@@ -244,6 +244,23 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
                      (float(obj["s"]), obj.get("d"),
                       int(obj.get("ts") or row["ts"]), nid))
         return
+    if row["kind"] == "character":
+        # 角色事实：一条一条的记录，最后一条为准。**不是记忆，不进 nodes。**
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            return
+        key = (obj.get("key") or "").strip()
+        value = str(obj.get("value") or "").strip()
+        if not key or not value:
+            return
+        conn.execute("INSERT INTO character(key, value, src, updated_ts)"
+                     " VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET"
+                     " value=excluded.value, src=excluded.src,"
+                     " updated_ts=excluded.updated_ts",
+                     (key, value, str(obj.get("src") or "seed"),
+                      int(row["ts"])))
+        return
     if row["kind"] == "place_name":
         # 她给一个地方起了名字。**标注不是学出来的**，但同样走事件，
         # 这样重放能重建、wipe 能清掉、也能追到是谁什么时候说的。
@@ -397,7 +414,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
 
     sql = ("SELECT * FROM events WHERE kind IN"
            " ('msg_in','inner','consolidate','persona','funnel','seed','fact',"
-           "  'alias','reinforce','place_name')")
+           "  'alias','reinforce','place_name','character')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -418,7 +435,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
             response = (row["payload"].decode("utf-8", "replace")
                         if row["kind"] in ("consolidate", "persona", "funnel",
                                            "seed", "fact", "alias", "reinforce",
-                                           "place_name")
+                                           "place_name", "character")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(

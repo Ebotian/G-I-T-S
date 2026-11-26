@@ -203,6 +203,9 @@ class Ghost:
             got = self.initiative(t)
             if got:
                 did["initiative"] = got
+        got = self.character_weekly(t)
+        if got:
+            did["character"] = got
         if t - self._last_world >= self.world_ms:
             got = self.world(t)
             if got:
@@ -258,6 +261,54 @@ class Ghost:
             self.fault("opening", exc, now=t)
             return ""
         return "" if out is None else str(got.get("why") or "allow")
+
+    def character_weekly(self, t: int | None = None) -> str:
+        """周日夜里，让模型**总结性地**更新角色事实。
+
+        两件事刻意分开：模型提议数值，**代码判定能不能收**。
+        "模型说这周长高了 8 厘米"这种事，靠提示词是拦不住的。
+        """
+        from gits.memory import character as C
+
+        t = now_ms() if t is None else t
+        if not C.due_weekly(self.db, now=t):
+            return ""
+        import json
+
+        cur = C.current(self.db)
+        try:
+            from gits.speech.llm import chat
+
+            ask = json.dumps({"已有": cur, "本周编号": C.week_of(t)},
+                             ensure_ascii=False)
+            reply = chat(
+                [{"role": "system", "content":
+                  "你在更新一份关于自己的客观记录（身高、体重这类）。"
+                  "只输出 JSON：键是第一层，值是数字或短字符串。"
+                  "没有变化就输出 {}。不要解释、不要新增未列出的键。"},
+                 {"role": "user", "content": ask}],
+                model="deepseek-flash", max_tokens=200, thinking=False)
+            got = json.loads(reply.text or "{}")
+        except Exception as exc:
+            self.fault("character", exc, now=t)
+            return ""
+        if not isinstance(got, dict):
+            return ""
+        changed = []
+        for key, value in got.items():
+            if key not in C.ALLOWED:
+                continue
+            ok, why = C.bounded(self.db, key=key, value=value)
+            if not ok:
+                self.fault("character:" + str(key), ValueError(why), now=t)
+                continue
+            if C.record(self.db, key=str(key), value=value, src="dream",
+                        now=t):
+                changed.append(str(key))
+        # **标记这一周跑过了。** 没有它 due_weekly 永远为真——
+        # 同一周重复调模型、重复花钱，而且不报错。
+        C.mark_week(self.db, now=t)
+        return ",".join(changed)
 
     def _contact(self) -> dict | None:
         """主动开口发给谁。**没有联系人就不发**，不猜。"""

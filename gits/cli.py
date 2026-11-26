@@ -246,6 +246,38 @@ def cmd_ingress(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_character(args: argparse.Namespace) -> int:
+    """角色事实：年龄推导，其余可读写。**是记录，不是记忆。**"""
+    import time
+
+    from gits.core.db import DB
+    from gits.memory import character as C
+
+    db = DB(Path(args.db))
+    now = int(time.time() * 1000)
+    if args.key:
+        if args.value is None:
+            print("  要给一个值")
+            return 2
+        ok, why = C.bounded(db, key=args.key, value=args.value)
+        if not ok:
+            print(f"  拒收：{why}")
+            return 2
+        ev = C.record(db, key=args.key, value=args.value, src="user", now=now)
+        print(f"  {'记下了' if ev else '没记（键不在白名单里）'}：{args.key}={args.value}")
+        return 0 if ev else 2
+    cur = C.current(db)
+    if not cur:
+        print("  （还没有角色事实）")
+        return 0
+    for k, v in sorted(cur.items()):
+        print(f"  {k} = {v}")
+    a = C.age(db, now=now)
+    if a is not None:
+        print(f"  （年龄按生日推导：{a}）")
+    return 0
+
+
 def cmd_world(args: argparse.Namespace) -> int:
     """外面的世界：她此刻读到的天气。**读数落成事件，不是实时查询。**"""
     import time
@@ -604,6 +636,10 @@ def build_parser() -> argparse.ArgumentParser:
     lc.add_argument("--source", default=None)
     lc.add_argument("--stdin", action="store_true", help="从 stdin 读 termux-location 的 JSON")
     lc.set_defaults(fn=cmd_loc)
+    ch = sub.add_parser("character", help="角色事实：年龄/身高/体重（记录，不是记忆）")
+    ch.add_argument("key", nargs="?")
+    ch.add_argument("value", nargs="?")
+    ch.set_defaults(fn=cmd_character)
     wd = sub.add_parser("world", help="外面的世界：天气/位置（读数是事件）")
     wd.add_argument("--fetch", action="store_true", help="现在去取一次")
     wd.add_argument("--verify-location", action="store_true",

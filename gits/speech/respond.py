@@ -165,10 +165,17 @@ def _prepare(db: DB, *, now: int, actor: str, stimulus: str,
     from gits.world import brief_text
 
     fresh_window = not history
+    # **角色事实和解读规则一样：只在上下文开头出现一次。**
+    # 它是她自己的事，不会一小时一变——每轮重复只是白烧 token。
+    from gits.memory import character
+
+    self_facts = character.line(db, now=now) if fresh_window else ""
+    background = brief_text(db, now=now, actor=actor, head=fresh_window)
+    if self_facts:
+        background = ("# 关于你自己（事实，不是设定）" + chr(10)
+                      + self_facts + chr(10) + background).strip()
     ctx = TurnContext(stimulus=stimulus, recent=tuple(history), recalled=lines(hits),
-                      due=due,
-                      background=brief_text(db, now=now, actor=actor,
-                                            head=fresh_window))
+                      due=due, background=background)
     a_hash = render_a(seed)
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
     return seed, snap, ctx, a_hash, body, hits
