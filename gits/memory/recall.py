@@ -105,10 +105,12 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
         for h in hits:
             row = latest_content(db, h.node_id)
             text = str(row["content"]) if row else ""
-            mult = 1.0
-            for topic, w in topic_w.items():
-                if topic and topic in text:
-                    mult = max(mult, max(0.5, min(2.0, w)))
+            # **双向**：命中高分话题会抬权，命中低分话题会降权。
+            # 早先是 `max(1.0, w)`，于是低于 1 的偏好永远降不了权——
+            # 那些"最近不太在意"的锚点白算了。
+            matched = [max(0.1, min(5.0, w)) for topic, w in topic_w.items()
+                       if topic and topic in text]
+            mult = max(matched) if matched else 1.0
             # Hit 是冻结的：换个对象，不要原地改
             adjusted.append(Hit(node_id=h.node_id, score=h.score * mult,
                                 sim=h.sim, why=h.why))

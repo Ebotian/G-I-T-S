@@ -99,7 +99,37 @@ def observe_event(db: DB, actor: str, event: str, *, now: int) -> dict[str, floa
     out = {}
     for key, delta in deltas.items():
         out[key] = bump(db, actor, key, delta, now=now)
+    _to_affect(db, actor, deltas, now=now)
     return out
+
+
+#: 慢变量往哪个方向动 → 往哪一格情绪上推。
+#: **这是「情绪由算法给出」的落点**：不由模型读文本判断，由状态变化推出来。
+#: 方向不猜（confidence 掉 = 难受是常识），幅度按增量大小取 1 或 2 档。
+STATE_TO_AFFECT = {
+    ("confidence", +1): ("trust", 1),
+    ("confidence", -1): ("sadness", 1),
+    ("cadence", +1): ("joy", 1),
+    ("cadence", -1): ("fear", 1),
+}
+#: 增量小于这个就不动情绪——日常小幅波动不该每次都改心情
+AFFECT_EPS = 0.02
+
+
+def _to_affect(db: DB, actor: str, deltas: dict[str, float], *,
+               now: int) -> None:
+    """把慢变量的变化折成一次情绪观测。"""
+    from gits.social.affect import observe
+
+    for key, delta in deltas.items():
+        if abs(delta) < AFFECT_EPS:
+            continue
+        spec = STATE_TO_AFFECT.get((key, 1 if delta > 0 else -1))
+        if spec is None:
+            continue
+        angle, _base = spec
+        intensity = 2 if abs(delta) >= AFFECT_EPS * 3 else 1
+        observe(db, actor, angle=angle, intensity=intensity, ts=now)
 
 
 def regret_ratio(db: DB, actor: str, *, now: int) -> float:

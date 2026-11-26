@@ -94,12 +94,28 @@ def apply(db: DB, event: dict, payload: dict, *, ts: int | None = None) -> str:
         return project.apply_payload(c, row, payload)
 
 
-def _speaker(event: dict) -> str:
-    """这条情绪是谁的。peer:xxx 的来源归到那个实例，其余归主个体。"""
+def _speaker(db: DB, event: dict) -> str:
+    """这条情绪**是谁的**。
+
+    以前一律返回 "her"——于是微信里他说的每句话都被记成她的心情。
+    自己的心情来自自己说的话，别人的话是别人的心情，两者不能混。
+
+    判定顺序：
+      她说的话（msg_out / 独白）  → her
+      peer 发来的                 → 那个 peer
+      微信等入站（source=shell）  → **入站路由里那个人**（event_route）
+    """
+    kind = str(event.get("kind") or "")
     source = str(event.get("source") or "")
+    if kind in ("msg_out", "inner"):
+        return "her"
     if source.startswith("peer:"):
         return source.split(":", 1)[1]
-    return "her"
+    route = db.one("SELECT actor_id FROM event_route WHERE event_id=?",
+                   (event.get("id"),))
+    if route is not None and route["actor_id"]:
+        return str(route["actor_id"])
+    return "her"                       # 老事件没有路由，只能归主个体
 
 
 def done(db: DB, event_id: int) -> bool:
@@ -155,7 +171,7 @@ def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
     if payload.get("affect"):
         from gits.social.affect import observe
 
-        observe(db, _speaker(event), angle=payload["affect"]["angle"],
+        observe(db, _speaker(db, event), angle=payload["affect"]["angle"],
                 intensity=payload["affect"]["intensity"],
                 ts=int(ts or event["ts"]))
     return Extracted(

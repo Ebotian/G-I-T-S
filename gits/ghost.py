@@ -255,7 +255,7 @@ class Ghost:
         t = now_ms() if t is None else t
         self._last_ctx = t
         plan = ctxwin.plan(self.db, now=t, idle=expected_idle(self.db, t),
-                           compact_ms=self.compact_ms_est)
+                           compact_ms=ctxwin.compact_ms_from_history(self.db))
         if plan.action in ("compact_idle", "compact_force"):
             # **整理不在心跳线程里跑。** 它要一次 thinking=high 的调用（几秒到几十秒），
             # 放在 tick 里等于这段时间他不回话。

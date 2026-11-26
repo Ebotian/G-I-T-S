@@ -196,6 +196,13 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
         c.execute("INSERT INTO influence(outbox_id, node_id, w, model_call_id)"
                   " VALUES(?,?,?,?)", (outbox_id, f"persona:v{prompt.a_hash[:12]}",
                                        1.0, call_id))
+        # **把真正进了上下文的节点也记下来**。
+        # 只记人格哈希的话，事后能回答"用了哪版人格"，却回答不了
+        # "这句话凭什么"——而后者才是她能被追问的那个问题。
+        for rank, h in enumerate(hits):
+            c.execute("INSERT INTO influence(outbox_id, node_id, w, model_call_id)"
+                      " VALUES(?,?,?,?)", (outbox_id, h.node_id,
+                                           round(float(h.score), 6), call_id))
     return Turn(event_id=event["id"], reply=reply, outbox_id=outbox_id)
 
 

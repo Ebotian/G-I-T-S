@@ -89,7 +89,8 @@ def compact(db: DB, *, now: int | None = None, model: str = "deepseek-flash",
     ev, _ = Writer(db).append_event(
         source="ghost", kind="consolidate", ext_id=f"w{win['id']}",
         ts=now, recv_ts=now,
-        payload=json.dumps(obj, ensure_ascii=False).encode())
+        payload=json.dumps({**obj, "latency_ms": reply.latency_ms},
+                           ensure_ascii=False).encode())
     Writer(db).append_model_call(
         kind="consolidate", model=reply.model, response=reply.text,
         event_id=ev, usage_json=str(reply.usage), ts=now)

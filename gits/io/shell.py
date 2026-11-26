@@ -153,7 +153,8 @@ class Shell:
                 if created:
                     n += 1
                     self._remember(item, ch.name, t)
-                    self._link_reply(t)
+                    # 把**入站事件 id** 带上：事后要知道她是在接谁的哪一句。
+                    self._link_reply(t, ref_event_id=ev)
             ack = getattr(ch, "ack", None)
             if ack:
                 ack()                      # 落库了，通道才可以推进游标
@@ -196,7 +197,7 @@ class Shell:
                  str(item.get("text", ""))[:200]),
             )
 
-    def _link_reply(self, t: int) -> None:
+    def _link_reply(self, t: int, *, ref_event_id: int | None = None) -> None:
         """把这次回复挂到**一条还没被回过的**已发送 outbox 上。
 
         没有这一步，`outcomes` 永远是空的——而 `influence` 的强化
@@ -214,7 +215,7 @@ class Shell:
             return                      # 没发过、或都回过了——不硬凑
         with self.w.txn() as c:
             c.execute("INSERT INTO outcomes(outbox_id, ts, kind, ref_event_id)"
-                      " VALUES(?,?,?,NULL)", (row["id"], t, "reply"))
+                      " VALUES(?,?,?,?)", (row["id"], t, "reply", ref_event_id))
         # **行为事件驱动慢变量**（不硬编码语气/长度/文风，那由 style.py 算）。
         # 回得快/慢是可观测的，比模型对一句话的情绪判断可靠得多。
         from gits.social import state as slow

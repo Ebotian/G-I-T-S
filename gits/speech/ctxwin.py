@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from gits.core.db import DB, Writer, now_ms
@@ -26,6 +27,11 @@ HARD = 0.80          # 强制整理（要告诉她）
 LOW_HIT = 0.50       # 命中率低于此值立刻换窗
 SAMPLE = 20          # 命中率看最近多少次
 ZERO_STREAK = 2      # 连续几次 0 命中判定缓存过期
+#: 空闲预测的可信度低于这个值，就不在"闲时"动手——
+#: 一个 confidence=0.075 的预测放行整理，等于拿噪声做决定。
+MIN_IDLE_CONFIDENCE = 0.25
+#: 整理耗时的缺省估值；有历史就拿中位数。
+DEFAULT_COMPACT_MS = 20_000
 
 
 @dataclass(frozen=True)
@@ -82,6 +88,27 @@ def record(db: DB, window_id: int, *, tokens: int, hit_tokens: int,
             (tokens, hit_tokens, zero, event_id, window_id))
 
 
+def compact_ms_from_history(db: DB, *, sample: int = 5) -> int:
+    """整理一次大概要多久：拿最近几次的中位数。
+
+    早先固定 20 秒估值——那是拍的。整理自己会报实测耗时，没理由不用。
+    """
+    rows = db.q("SELECT payload FROM events WHERE kind='consolidate'"
+                " ORDER BY id DESC LIMIT ?", (sample,))
+    got = []
+    for r in rows:
+        try:
+            v = json.loads(r["payload"] or b"{}").get("latency_ms")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if isinstance(v, (int, float)) and v > 0:
+            got.append(float(v))
+    if not got:
+        return DEFAULT_COMPACT_MS
+    got.sort()
+    return int(got[len(got) // 2])
+
+
 def hit_rate(db: DB, *, sample: int = SAMPLE) -> float | None:
     rows = db.q(
         "SELECT tokens, hit_tokens FROM ctx_windows WHERE turns > 0"
@@ -119,6 +146,10 @@ def plan(db: DB, *, now: int | None = None, tokens: int | None = None,
     if tokens >= BUDGET_TOKENS * SOFT:
         if idle is None:
             return Plan("append", f"{tokens}/{BUDGET_TOKENS} 该整理了，但不知道你闲不闲")
+        if idle.confidence < MIN_IDLE_CONFIDENCE:
+            return Plan("append",
+                        f"{tokens}/{BUDGET_TOKENS} 该整理了，但空闲预测只有"
+                        f" {idle.confidence:.0%} 可信（{idle.basis}）")
         if idle.at_least(compact_ms):
             return Plan("compact_idle",
                         f"空闲下界 {idle.p10_ms // 1000}s > 整理 {compact_ms // 1000}s×1.5")
