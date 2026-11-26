@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from gits.core.db import DB, Writer
+from gits.core.db import DB
 
 #: 待了多久的分桶。**不给分钟**——给了模型就会开始算钟点，
 #: 而墙钟只做参照层。分桶保留了"待挺久了"这个信息，丢掉了钟面。
@@ -35,7 +35,7 @@ SUBSTANTIVE = ("place", "usual", "weather")
 
 #: 背景块前面那一行。**顺序说明是必须的**：不写，模型会把两行快照读成
 #: 并列的两个选项（"你最近是不是搬家了"），而不是先后。
-BRIEF_HEAD = "# 你此刻知道的（每行是那一刻的状态，最后一行是现在；不用转述）"
+BRIEF_HEAD = "# 你此刻知道的（最后一行是现在；不用转述）"
 
 
 def _stay(minutes: float | None) -> str | None:
@@ -111,32 +111,3 @@ def render(brief: dict[str, Any]) -> str:
         return ""
     return json.dumps(brief, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"))
-
-
-def freeze(db: DB, *, now: int, actor: str = "her") -> str:
-    """每小时一份基线。**这一小时内所有轮次复用同一份字节。**"""
-    bucket = now // 3_600_000
-    row = db.one("SELECT blob FROM brief_snapshot WHERE bucket=?", (bucket,))
-    if row is not None:
-        return str(row["blob"])
-    # 用**第一次用到它的那一刻**算，不是整点算。
-    # 整点算的话，11:59 拿到的还是 11:00 的状态，"待了多久"会差一小时。
-    blob = render(build(db, now=now, actor=actor))
-    if blob:
-        with Writer(db).txn() as c:
-            c.execute("INSERT INTO brief_snapshot(bucket, blob, created)"
-                      " VALUES(?,?,?) ON CONFLICT(bucket) DO NOTHING",
-                      (bucket, blob, now))
-        row = db.one("SELECT blob FROM brief_snapshot WHERE bucket=?", (bucket,))
-        if row is not None:
-            return str(row["blob"])
-    return blob
-
-
-def changes(prev: dict[str, Any], cur: dict[str, Any]) -> dict[str, Any]:
-    """只挑**实质**变化。温度 ±1 不算——那不改变任何决定。"""
-    out: dict[str, Any] = {}
-    for k in SUBSTANTIVE:
-        if cur.get(k) != prev.get(k) and cur.get(k) is not None:
-            out[k] = cur[k]
-    return out

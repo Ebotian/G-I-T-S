@@ -125,16 +125,24 @@ def test_大风才提风(db) -> None:
     assert "风" not in amap.line(db, now=rep), "三级以下的风不值得说"
 
 
-def test_B段带上外面这一行(db) -> None:
-    """接进 B 段，不是另起一段——她看到的是同一份此刻。"""
+def _seed():
+    return C.PersonaSeed(narrative="我不太会哄人。", version=1)
+
+
+def test_背景进易变区不在_B_段(db) -> None:
+    """背景是**每轮追加**的，进 C 段开头；B 段只放关系。"""
+    from gits.world import brief_text
+
     rep = _report_ms(WEATHER["report"])
     amap.record(db, WEATHER, now=rep)
-    snap = C.RelationSnapshot(bucket=0, summary="s", hubs=(), phase="醒着",
-                              world=amap.line(db, now=rep))
-    assert "小雨" in C.render_b(snap)
-    assert C.render_b(C.RelationSnapshot(bucket=0, summary="s", hubs=(), phase="醒着"))
-    assert "外面" not in C.render_b(C.RelationSnapshot(
-        bucket=0, summary="s", hubs=(), phase="醒着"))
+    text = brief_text(db, now=rep)
+    assert "小雨" in text
+    # 装配不认识它从哪来：只把它放在易变区最前面
+    snap = C.RelationSnapshot(bucket=0, summary="s", hubs=(), phase="醒着")
+    ctx = C.TurnContext(stimulus="在吗", background=text)
+    body = C.messages(_seed(), snap, ctx)
+    assert "小雨" in body[-1]["content"]
+    assert "小雨" not in body[0]["content"], "背景跑到 B 段去了"
 
 
 def test_取不到不抛(db, monkeypatch) -> None:

@@ -102,20 +102,14 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
     from gits.social.affect import line as affect_line
     from gits.speech.style import line as style_line
-    # **常驻背景块**：每小时冻结一次，一小时内逐字节相同。
-    # 结构化的，不是句子——代码不写散文，代码给数据。
-    from gits.world import brief as B
 
-    world = B.freeze(db, now=now, actor=actor)
 
     return RelationSnapshot(
         bucket=bucket(now),
         summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
         hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now),
         style=style_line(db, actor, now=now),
-        # 失手也不影响说话：读数读不到就是空，不抛。
-        world=world,
-        world_head=B.BRIEF_HEAD)
+    )
 
 
 def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:
@@ -172,8 +166,12 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     # C 段的日子：生日这类记录 + 窗口内的预报。**两类都是记录，不是读数。**
     due = tuple(fact_lines(db, now)) + tuple(fc.lines(db, now))
+    # 背景**每轮追加**在易变区开头。装配不知道它从哪来——
+    # 它只认 gits.world.brief_text() 这一个入口。
+    from gits.world import brief_text
+
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
-                      due=due)
+                      due=due, background=brief_text(db, now=now, actor=actor))
     # 只要 A 段的哈希（用于 influence 溯源），不必再跑一遍完整装配——
     # 两套装配并存过一段时间，固定事实就是从它们的缝里漏掉的。
     a_hash = render_a(seed)

@@ -55,11 +55,6 @@ class RelationSnapshot:
     #: 说话的样子（style.py 算出来的）。空 = 没什么特别要调的。
     #: **这一行会变**，所以只能在 B 段；塞进 A 段会把缓存前缀打碎。
     style: str = ""
-    #: 常驻背景块（world/brief.py 冻结出来的 JSON）。空 = 不知道就不给。
-    #: **结构化，不是句子**：代码给数据，模型决定说成什么。
-    world: str = ""
-    #: 背景块前面那一行说明。顺序必须写死，否则模型会把两行读成并列。
-    world_head: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +64,9 @@ class TurnContext:
     stimulus: str
     recalled: tuple[str, ...] = ()
     recent: tuple[tuple[str, str], ...] = ()  # (role, text)
+    #: 每轮追加的背景（gits.world 给的）。空 = 什么都不知道。
+    #: **装配不认识它从哪来**——只管把它放在易变区的最前面。
+    background: str = ""
     #: 额度提示条（§18.6）。**只放在 C 段**——它每花一次就变，
     #: 塞进 A/B 会把缓存前缀打断（50 倍价差）。十几个 token，很便宜。
     quota_hint: str = ""
@@ -129,9 +127,6 @@ def render_b(snap: RelationSnapshot) -> str:
         f"此刻的状态：{snap.phase}\n"
         + (f"{snap.affect}\n" if snap.affect else "")
         + (f"{snap.style}\n" if snap.style else "")
-        + ((f"{snap.world_head}\n{snap.world}\n")
-           if (snap.world and snap.world_head) else
-           (f"{snap.world}\n" if snap.world else ""))
     )
 
 
@@ -166,7 +161,8 @@ def messages(seed: PersonaSeed, snap: RelationSnapshot, ctx: TurnContext,
 
     之前把「刚才几轮」写进 system，于是前缀每轮都断——实测命中率 0。
     """
-    parts = [p for p in (ctx.due and "# 日子" or "",
+    parts = [p for p in (ctx.background,
+                         ctx.due and "# 日子" or "",
                          *ctx.due,
                          ctx.recalled and "# 你想起来的事" or "",
                          *[f"- {r}" for r in ctx.recalled],

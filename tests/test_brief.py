@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from gits.core.db import DB, Writer
-from gits.world import brief as B
+import gits.world.brief as B
 from gits.world import loc, places
 
 T0 = int(dt.datetime(2026, 11, 26, 11, 0).timestamp() * 1000)
@@ -52,44 +52,13 @@ def _fill(db: DB, *, city: str = "温州市", name: str | None = None) -> int:
     return pid
 
 
-def test_同小时内逐字节相同(db) -> None:
-    """**"通常不变"和"保证不变"是两件事。** 冻结之后才叫保证。"""
-    _fill(db)
-    a = B.freeze(db, now=T0 + 60_000)
-    # 一小时里天气翻面、位置也动了——**这会改字**，所以必须靠冻结挡住
-    from gits.world import amap
-
-    amap.record(db, {"kind": "weather", "adcode": "330303", "city": "温州市",
-                     "weather": "小雨", "temp": 11.0, "humidity": 88.0,
-                     "wind": "东北", "power": "4",
-                     "report": "2026-11-26 11:30:00"}, now=T0 + 1_800_000)
-    loc.record(db, lat=27.90, lon=120.90, acc=30, source="gps",
-               fix_ts=T0 + 1_900_000, now=T0 + 1_900_000, city={"city": "宁波市"})
-    b = B.freeze(db, now=T0 + 2_400_000)
-    assert a == b, "同一小时内背景块变了"
-    assert "晴" in a and "小雨" not in a, "冻结没挡住新读数"
-    # 换小时才换一份
-    nxt = B.freeze(db, now=T0 + HOUR + 60_000)
-    assert nxt != a, "换小时了却没换一份"
 
 
-def test_冻结用的是用的那一刻不是整点(db) -> None:
-    """整点算的话，11:59 拿到的还是 11:00 的状态——\"待了多久\"会差一整个小时。"""
-    _fill(db)
-    # 他在 T0-20 分钟到的；第一次用到背景块是 T0+100 分钟 -> 一共 120 分钟 -> 待了挺久
-    # 若按整点(T0)算，只有 20 分钟 -> 刚坐下，差一整个桶
-    with Writer(db).txn() as c:
-        c.execute("UPDATE place_state SET since=? WHERE actor='her'", (T0 - 20 * 60_000,))
-    blob = B.freeze(db, now=T0 + 100 * 60_000)
-    assert "待了挺久" in blob, blob
 
 
-def test_换小时就换一份(db) -> None:
-    _fill(db)
-    a = B.freeze(db, now=T0)
-    b = B.freeze(db, now=T0 + HOUR)
-    assert a  # 至少非空
-    assert db.scalar("SELECT count(*) FROM brief_snapshot") == 2
+
+
+
 
 
 def test_只放可核对的事实(db) -> None:
@@ -135,20 +104,48 @@ def test_序列化是确定性的(db) -> None:
     assert list(json.loads(one)) == sorted(json.loads(one))
 
 
-def test_只有实质变化才算变化(db) -> None:
+def test_每轮追加是纯函数(db) -> None:
+    """同一份数据 + 同一时刻 -> 同一段文本。**这条现在靠纯函数，不靠冻结。**"""
     _fill(db, name="公司")
-    base = B.build(db, now=T0)
-    # 温度变了：不算实质
-    warmer = dict(base, temp=20)
-    assert B.changes(base, warmer) == {}
-    # 换地方：算
-    moved = dict(base, place="家")
-    assert B.changes(base, moved) == {"place": "家"}
-    # 天气翻面：算
-    rainy = dict(base, weather="小雨")
-    assert B.changes(base, rainy) == {"weather": "小雨"}
+    a = B.render(B.build(db, now=T0))
+    b = B.render(B.build(db, now=T0))
+    assert a == b
+    # 状态一变，文本就必须跟着变——不做缓存、不冻结
+    with Writer(db).txn() as c:
+        c.execute("UPDATE place_state SET since=? WHERE actor='her'", (T0 - 600_000,))
+    c2 = B.render(B.build(db, now=T0 + 3_600_000))
+    assert c2 != a
 
 
-def test_没有读数就是空块(db) -> None:
-    assert B.render(B.build(db, now=T0)) == ""
-    assert B.freeze(db, now=T0) == ""
+# ── 边界：装配不认识世界 ────────────────────────────────────
+
+
+def test_装配不直接碰世界模块() -> None:
+    """**装配只管拼，背景只管给。** 谁都能加字段的话，
+    上下文里迟早会长出没人知道从哪来的东西。"""
+    import pathlib as _p
+
+    src = _p.Path("gits/speech/respond.py").read_text()
+    for bad in ("from gits.world import amap", "from gits.world import loc",
+                "from gits.world import places", "import gits.world.brief"):
+        assert bad not in src, f"装配里直接引了世界模块：{bad}"
+    assert "brief_text" in src, "装配应该只认这一个入口"
+
+
+def test_详细走分类工具() -> None:
+    """详细的走工具，按类取。未知分类返回空，不抛。"""
+    from gits.world import catalog, detail
+
+    names = [c["name"] for c in catalog()]
+    assert {"where", "outside", "place", "self"} <= set(names)
+    for c in catalog():
+        assert c.get("about"), f"{c['name']} 没有作用说明"
+
+
+def test_工具目录是分类不是一个大接口(db) -> None:
+    from gits.world import catalog, detail
+
+    for t in catalog():
+        got = detail(db, t["name"], now=T0)
+        assert isinstance(got, dict), t["name"]
+    assert detail(db, "不存在的分类", now=T0) == {}
