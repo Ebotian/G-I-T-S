@@ -63,6 +63,7 @@ def _clamp(w: float, base: float) -> float:
 
 def step(db: DB, *, pair: tuple[str, str], pressure: float = 0.0,
          now: int | None = None, reestimate_anchors: bool = True,
+         dt_days: float | None = None,
          ) -> dict[str, dict[str, float]]:
     """漂一天。`pressure` 是重叠加压（0..1），只影响**幅度**，不影响方向。
 
@@ -71,12 +72,20 @@ def step(db: DB, *, pair: tuple[str, str], pressure: float = 0.0,
     """
     now = now or now_ms()
     a, b = pair
+    # **按经过的时间施加，不是按调用次数。**
+    # ghost 每分钟调一次，而 rate 是"每天"的量——以前一小时就跑掉两天的漂移。
+    if dt_days is None:
+        last = db.scalar(
+            "SELECT max(updated_ts) FROM attention WHERE actor_id IN (?,?)",
+            (a, b))
+        dt_days = 0.0 if not last else max(0.0, (now - int(last)) / 86_400_000)
+    dt_days = min(float(dt_days), 7.0)          # 睡一周也不该一次补完
     # 先让锚点跟着真实数据走一步，再谈漂移。
     # 顺序有意义：锚点决定漂移围绕的**中心**，中心没更新就漂是白漂。
     if reestimate_anchors:
         reestimate(db, a, now=now)
         reestimate(db, b, now=now)
-    rate = min(MAX_DAILY, BASE_RATE * (1.0 + 4.0 * max(0.0, pressure)))
+    rate = min(MAX_DAILY, BASE_RATE * (1.0 + 4.0 * max(0.0, pressure))) * max(0.0, dt_days)
     wa, wb = weights(db, a), weights(db, b)
     shared = sorted(set(wa) & set(wb))[:TOPICS_PER_DAY]
 

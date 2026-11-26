@@ -156,7 +156,9 @@ def test_第一次开口能被查出来(db) -> None:
 def test_漂移反相且限速(db) -> None:
     attention.seed(db, "peer1", {"开会": 1.0, "咖啡": 1.0})
     attention.seed(db, "peer2", {"开会": 1.0, "咖啡": 1.0})
-    d = attention.step(db, pair=("peer1", "peer2"), pressure=1.0, now=T0)
+    # 漂移按**经过的天数**施加：种子写在 T0，所以要在一天之后看
+    d = attention.step(db, pair=("peer1", "peer2"), pressure=1.0,
+                       now=T0 + 86_400_000, dt_days=1.0)
     assert d["peer1"]["开会"] > 0 and d["peer2"]["开会"] < 0, "反相"
     assert abs(d["peer1"]["开会"]) <= attention.MAX_DAILY + 1e-9, "限速"
 
@@ -165,7 +167,8 @@ def test_漂移有界(db) -> None:
     attention.seed(db, "peer1", {"开会": 1.0})
     attention.seed(db, "peer2", {"开会": 1.0})
     for i in range(200):
-        attention.step(db, pair=("peer1", "peer2"), pressure=1.0, now=T0 + i)
+        attention.step(db, pair=("peer1", "peer2"), pressure=1.0,
+                       now=T0 + i * 86_400_000, dt_days=1.0)
     w = attention.weights(db, "peer1")["开会"]
     assert w <= 2.0 + 1e-9, "上界 %s" % w
 
@@ -175,14 +178,16 @@ def test_没有推动就慢慢回到初始值(db) -> None:
     with Writer(db).txn() as c:
         c.execute("UPDATE attention SET weight=1.8 WHERE actor_id='peer1'")
     for i in range(100):
-        attention.step(db, pair=("peer1", "peer1"), now=T0 + i)
+        attention.step(db, pair=("peer1", "peer1"), now=T0 + i * 86_400_000,
+                           dt_days=1.0)
     assert attention.weights(db, "peer1")["开会"] < 1.8
 
 
 def test_漂移本身是事件且只在私有域(db) -> None:
     attention.seed(db, "peer1", {"开会": 1.0})
     attention.seed(db, "peer2", {"开会": 1.0})
-    attention.step(db, pair=("peer1", "peer2"), pressure=0.5, now=T0)
+    attention.step(db, pair=("peer1", "peer2"), pressure=0.5,
+                   now=T0 + 86_400_000, dt_days=1.0)
     ev = db.one("SELECT scope, payload FROM events WHERE kind='drift'")
     assert ev is not None and ev["scope"] == self_of("peer1")
     assert json.loads(ev["payload"])["pair"] == ["peer1", "peer2"]
@@ -312,7 +317,7 @@ def test_漂移围绕新的锚点走(db) -> None:
     attention.seed(db, "peer1", {"开会": 2.0}, ts=T0)
     attention.seed(db, "peer2", {"开会": 2.0}, ts=T0)
     before = db.scalar("SELECT base_weight FROM attention WHERE actor_id='peer1'")
-    attention.step(db, pair=("peer1", "peer2"), now=T0 + DAY)
+    attention.step(db, pair=("peer1", "peer2"), now=T0 + DAY, dt_days=1.0)
     after = db.scalar("SELECT base_weight FROM attention WHERE actor_id='peer1'")
     assert after < before, "step 里先估锚点，锚点朝中性挪了"
 
@@ -340,3 +345,17 @@ def test_收缩不会把方向搞反(db) -> None:
     for n in (1.0, 3.0, 10.0):
         assert attention._target(n, 1.0) >= 1.0
         assert attention._target(1.0, n) <= 1.0
+
+
+def test_一分钟的漂移应该几乎为零(db) -> None:
+    """ghost 每分钟调一次，而 rate 是「每天」的量。
+
+    以前不乘 dt：50 次调用就把一天的量跑完了（实测权重 1.0 → 2.0 / 0.5）。
+    """
+    # 种子必须写在 T0，否则 dt 会按真实时间算（实测差出 50 天 → 被夹到 7）
+    attention.seed(db, "peer1", {"开会": 1.0}, ts=T0)
+    attention.seed(db, "peer2", {"开会": 1.0}, ts=T0)
+    attention.step(db, pair=("peer1", "peer2"), pressure=1.0,
+                   now=T0 + 60_000)          # 只过了一分钟，不传 dt_days
+    w1 = attention.weights(db, "peer1")["开会"]
+    assert abs(w1 - 1.0) < 0.01, f"一分钟就漂到 {w1:.3f}"

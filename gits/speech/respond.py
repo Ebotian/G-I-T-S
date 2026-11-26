@@ -108,12 +108,30 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         style=style_line(db, actor, now=now))
 
 
-def pending(db: DB, *, limit: int = 3) -> list[dict]:
-    """还没被回过、也没被放弃过的 msg_in。"""
+def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:
+    """**这一轮该她回的**消息。
+
+    两个条件缺一不可，各自对应一次被实测到的问题：
+
+      ① 可见域内（scope）
+         以前不筛，于是 peer 发给 peer 的私信（scope=self:peer2）会被主实例领走，
+         当作「他对我说的话」——正文进模型、回复发到微信。
+
+      ② 没有 replied 标记
+         以前靠 outbox.ref_event_id 判断回没回过，而 outbox 是投影表，
+         project.restore() 会整表清空 → 夜里 replay 之后所有旧消息重新变成
+         待回复：重答、重发、重复付费。**标记必须落成事件**才经得起重放。
+    """
+    from gits.core.scope import visible
+
+    vis = visible(actor)
+    marks = ",".join("?" * len(vis))
     return [dict(r) for r in db.q(
         "SELECT e.* FROM events e WHERE e.kind='msg_in'"
-        " AND NOT EXISTS (SELECT 1 FROM outbox o WHERE o.ref_event_id=e.id)"
-        " ORDER BY e.id LIMIT ?", (limit,))]
+        " AND e.scope IN (" + marks + ")"
+        " AND NOT EXISTS (SELECT 1 FROM events r WHERE r.kind='replied'"
+        "   AND r.ext_id = 'replied:' || e.id)"
+        " ORDER BY e.id LIMIT ?", (*vis, limit))]
 
 
 def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
@@ -193,6 +211,11 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
                                       ensure_ascii=False),
              event["id"]))
         outbox_id = int(cur.lastrowid)
+
+    # **回过了**——落成事件，不是靠 outbox 那行。重放会清空的只有投影。
+    Writer(db).append_event(
+        source="ghost", kind="replied", ext_id=f"replied:{event['id']}",
+        ts=now, recv_ts=now, scope=event["scope"], payload=b"")
 
     # 溯源：这句话用了哪版人格、哪次调用（§3.1 可追溯）
     with Writer(db).txn() as c:

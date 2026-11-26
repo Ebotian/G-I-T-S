@@ -36,8 +36,9 @@ def _node(db: DB, nid: str, text: str, *, s: float, ts: int = T0) -> None:
                   " VALUES(?,?,?)", (nid, text, ts))
 
 
-def _hit(nid: str, r: float = 1.0) -> Recalled:
-    return Recalled(node_id=nid, score=r, sim=0.5, r=r, text=nid, age_ms=0)
+def _hit(nid: str, r: float = 1.0, score: float | None = None) -> Recalled:
+    return Recalled(node_id=nid, score=r if score is None else score,
+                    sim=0.5, r=r, text=nid, age_ms=0)
 
 
 def test_频带由稳定期读出来(db) -> None:
@@ -130,3 +131,15 @@ def test_名额比带数还少时按证据量(db) -> None:
     got = allocate(db, [_hit("n:a", 0.1), _hit("n:b", 0.2), _hit("n:c", 0.9)],
                     slots=1)
     assert [h.node_id for h in got] == ["n:c"]
+
+
+def test_带内按相关性排_不是按稳定期(db) -> None:
+    """只按 r 排的话，一条新近纠正、精准命中问题的记忆会输给
+    一条熟悉但关系较弱的旧记忆——而「记得牢」不等于「答得上」。
+    """
+    _node(db, "n:familiar", "熟悉的旧事", s=8.0)
+    _node(db, "n:fresh", "刚纠正的那件事", s=8.0)
+    hits = [_hit("n:familiar", r=0.95, score=0.30),
+            _hit("n:fresh", r=0.40, score=0.90)]
+    got = allocate(db, hits, slots=2)
+    assert [h.node_id for h in got] == ["n:fresh", "n:familiar"]

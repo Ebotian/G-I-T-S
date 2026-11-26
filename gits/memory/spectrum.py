@@ -99,7 +99,10 @@ def allocate(db: DB, hits: list, *, slots: int = 5, arousal: float = 0.0,
     # ⑤ 带内按 r 取前几名；**低频在前**（先给一贯的样子，再给这一件事）
     out: list = []
     for b in sorted(quota, reverse=True):
-        rows = sorted(bands[b], key=lambda h: -float(h.r))[:quota[b]]
+        # **带内按相关性排，不是按稳定期。**
+        # 只按 r 排的话，一条新近纠正、精准命中问题的记忆会输给
+        # 一条熟悉但关系较弱的旧记忆——而"记得牢"不等于"答得上"。
+        rows = sorted(bands[b], key=lambda h: -float(h.score))[:quota[b]]
         out.extend(rows)
     return out[:slots]
 

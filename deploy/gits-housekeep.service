@@ -15,7 +15,10 @@ PrivateTmp=yes
 NoNewPrivileges=yes
 ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her
 
-ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db replay --restore
+# **在影子库上校验，不动线上库。**重放会清空 outbox / influence 这些投影表，
+# 对正在用的库直接跑会丢掉尚未发出的回复（旧版还会让所有旧消息重新变成待回复，
+# 于是重答、重发、重复付费）。真需要恢复时手工跑 replay --restore。
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db replay --shadow
 ExecStartPost=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/shared/gits.db status
 Nice=10
 IOSchedulingClass=idle

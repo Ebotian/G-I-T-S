@@ -96,10 +96,46 @@ def cmd_say(args: argparse.Namespace) -> int:
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
+    if args.shadow:
+        return _replay_shadow(args)
     with _open(args) as db:
         n = restore(db)
         print(f"replayed {n} events -> {dump_projection(db).canonical()[:80]}...")
     return 0
+
+
+def _replay_shadow(args: argparse.Namespace) -> int:
+    """在**副本**上重放，对比线上投影。**不碰正在用的库。**
+
+    为什么夜里不该对生产库直接 replay：`outbox` 和 `influence` 是投影表，
+    重放会清空它们。回复本身在事件里（`replied` 标记），但如果一条回复
+    已经进了 outbox 还没发出去，重放就把它丢了；更糟的是旧版靠 outbox 判断
+    "回没回过"，重放之后所有旧消息会重新变成待回复——重答、重发、重复付费。
+
+    所以：校验放影子库，生产库只在**真的需要恢复**时重建。
+    """
+    import shutil
+    import sqlite3
+
+    src = Path(args.db)
+    shadow = src.with_suffix(src.suffix + ".shadow")
+    for extra in ("", "-wal", "-shm"):
+        p = Path(str(src) + extra)
+        if p.exists():
+            shutil.copy2(p, Path(str(shadow) + extra))
+    try:
+        sdb = DB(shadow)
+        live_nodes = DB(src).scalar("SELECT count(*) FROM nodes")
+        n = restore(sdb)
+        shadow_nodes = sdb.scalar("SELECT count(*) FROM nodes")
+        sdb.close()
+        same = live_nodes == shadow_nodes
+        print(f"影子重放 {n} 条事件：线上 {live_nodes} 节点，重建 {shadow_nodes} 节点"
+              f" → {'一致' if same else '**不一致**'}")
+        return 0 if same else 2
+    finally:
+        for extra in ("", "-wal", "-shm"):
+            Path(str(shadow) + extra).unlink(missing_ok=True)
 
 
 def cmd_quota(args: argparse.Namespace) -> int:
@@ -406,7 +442,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_say)
 
     r = sub.add_parser("replay", help="恢复重放：清空投影，只用日志集重建")
-    r.add_argument("--restore", action="store_true", help="（唯一的模式，保留以便以后加 --experiment）")
+    r.add_argument("--restore", action="store_true",
+                   help="（唯一的模式，保留以便以后加 --experiment）")
+    r.add_argument("--shadow", action="store_true",
+                   help="在副本上重放做校验，不动线上库（夜间任务该用这个）")
     r.set_defaults(fn=cmd_replay)
 
     t = sub.add_parser("trace")

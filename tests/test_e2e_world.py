@@ -301,3 +301,67 @@ def test_同一条消息里同一个实体只算一次(world) -> None:
                  " AND id=? ", (__import__('gits.core.project', fromlist=['entity_id'])
                                 .entity_id("辞职"),))
     assert row["touch_n"] == 1, f"同一条消息记了 {row['touch_n']} 次"
+
+
+# ── 恢复语义：重放不能让旧消息重新变成待回复 ─────────────────
+
+
+def test_重放之后不会重答(world) -> None:
+    db, _llm, _p = world
+    """以前靠 outbox.ref_event_id 判断回没回过，而 outbox 是投影表，
+    重放会整表清空 → 所有旧消息重新变成待回复：重答、重发、重复付费。
+    """
+    from gits.memory import extract as E
+    from gits.memory.persona import seed
+    import gits.memory.extract as EX
+    from gits.speech.llm import Reply
+
+    seed(db, "我不太会哄人。", now=T0)
+    ev, _ = Writer(db).append_event(source="shell", kind="msg_in", ext_id="m1",
+                                    ts=T0, recv_ts=T0, payload="在吗".encode())
+    orig_e, orig_r = EX.chat, R.chat
+    EX.chat = lambda *a, **k: Reply(
+        text=json.dumps({"summary": "他打了招呼", "entities": [],
+                         "claims": []}, ensure_ascii=False),
+        model="stub", usage={}, latency_ms=1)
+    R.chat = lambda *a, **k: Reply(text="嗯。", model="stub",
+                                   usage={"prompt_tokens": 100}, latency_ms=1)
+    try:
+        E.extract(db, dict(db.one("SELECT * FROM events WHERE id=?", (ev,))))
+        project.restore(db)
+        assert len(R.pending(db)) == 1
+        R.respond(db, R.pending(db)[0], now=T0)
+        assert len(R.pending(db)) == 0
+        project.restore(db)
+    finally:
+        EX.chat, R.chat = orig_e, orig_r
+    assert len(R.pending(db)) == 0, "重放之后又变成待回复了"
+
+
+def test_私有作用域的入站不会被主实例领走(world) -> None:
+    db, _llm, _p = world
+    """peer 发给 peer 的私信 scope=self:peer2，不该被主实例当作"他对我说的话"。"""
+    from gits.social import peer
+
+    peer.say(db, "peer1", "peer2", "秘密：他要辞职", now=T0)
+    peer.deliver(db, now=T0)
+    assert R.pending(db) == [], "别人的私信不该进她的待回复队列"
+
+
+# ── 影子重放 ────────────────────────────────────────────────
+
+
+def test_影子重放不动线上库(world) -> None:
+    db, _llm, _p = world
+    """夜间任务之所以该用 --shadow：重放会清空 outbox 这些投影表。"""
+    import subprocess
+    import sys
+
+    with Writer(db).txn() as c:
+        c.execute("INSERT INTO outbox(ts, channel, text, status)"
+                  " VALUES(?,?,?,'sent')", (T0, "weixin", "在"))
+    before = db.scalar("SELECT count(*) FROM outbox")
+    r = subprocess.run([sys.executable, "-m", "gits.cli", "--db", str(db.path),
+                        "replay", "--shadow"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert db.scalar("SELECT count(*) FROM outbox") == before, "线上库被动过了"
