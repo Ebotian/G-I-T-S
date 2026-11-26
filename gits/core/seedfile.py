@@ -7,9 +7,17 @@
   **报告不回显正文。**错误只说位置、字段、数值范围，
     因为生成它的人本来就不该看到内容。
 
-体裁限制得很死：只允许三样东西——实例身份、自我描述、注意力偏好。
+体裁限制得很死：只允许五样东西——实例身份、自我描述、注意力偏好、
+**角色事实**（年龄/身高/体重/三围）、**关系前史**（认识他之前的账）。
+
 **不允许塞 msg_in / inner 之类的事件**：那会伪造活动历史，
 而节律、遗忘、复现全是从活动历史里学出来的。一次假导入会污染一整个月。
+
+后两样能进来，是因为它们**不伪造活动历史**：角色事实是一组可核对的数值，
+前史是一条标注为"导入"的基线。它们既不产生活动，也不冒充交互。
+
+角色事实走 `character.problems()` 的跨字段自洽检查——**导入正是它该把守的入口**，
+因为这是唯一能一次塞进一整组数字的地方。
 """
 
 from __future__ import annotations
@@ -28,6 +36,11 @@ MAX_LABEL = 40
 CALENDARS = {"solar"}
 MAX_CHARS = 2000          # 一段自我描述
 MAX_ACTORS = 8
+MAX_CHARACTER_KEYS = 16
+#: 前史条数上限。它是个计数，不是历史记录——上限用来拦笔误（多打两个零）。
+MAX_BODY_COUNT = 999
+#: 前史时间的年代下限（岁）。**笔误拦截**：少打一位年份就是这种错。
+MIN_FIRST_AGE = 12.0
 MAX_TOPICS = 32
 MAX_FILE = 64 * 1024
 ID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
@@ -67,6 +80,11 @@ class Bundle:
     #: 会和真实交互共振并被永久强化。
     ephemeral: bool = False
     facts: list[FactSeed] = field(default_factory=list)
+    #: 角色事实：键 -> 文本值。键必须是 character.ALLOWED 里的。
+    character: dict[str, str] = field(default_factory=dict)
+    #: 关系前史。只有 body_count 和 first_time 两项——"数得出来"的部分
+    #: 由事件累积，不在这里给。
+    relations: dict[str, object] = field(default_factory=dict)
 
 
 def _strip_underscore(d: dict) -> dict:
@@ -91,7 +109,7 @@ def parse(text: str) -> Bundle:
     if got != FORMAT:
         raise Bad(f"format 必须是 {FORMAT}")
     unknown = set(top) - {"format", "generated_at", "actors", "ephemeral",
-                           "facts"}
+                           "facts", "character", "relations"}
     if unknown:
         raise Bad(f"顶层有未知字段：{sorted(unknown)}")
 
@@ -149,9 +167,119 @@ def parse(text: str) -> Bundle:
 
     facts = _parse_facts(top.get("facts") or [], seen)
 
+    generated_at = top.get("generated_at")
+    if generated_at is not None and (isinstance(generated_at, bool)
+                                     or not isinstance(generated_at, int)):
+        raise Bad("generated_at 必须是毫秒时间戳整数")
+    stamp = int(generated_at) if generated_at is not None else 0
+
+    ch = _parse_character(top.get("character") or {})
+    rel = _parse_relations(top.get("relations") or {}, generated_at=stamp)
+    _check_history(ch, rel, generated_at=stamp)
+
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     return Bundle(actors=actors, digest=digest,
-                  ephemeral=bool(top.get("ephemeral")), facts=facts)
+                  ephemeral=bool(top.get("ephemeral")), facts=facts,
+                  character=ch, relations=rel)
+
+
+def _parse_character(raw) -> dict[str, str]:
+    """角色事实：年龄/身高/体重/三围。**键必须在白名单里，数值必须自洽。**
+
+    这是导入器里唯一能一次塞进一整组数字的地方，所以跨字段检查必须在这里跑——
+    character.bounded() 管的是"一周变了多少"，导入没有"上一周"，跑不了。
+    """
+    from gits.memory import character
+
+    if not isinstance(raw, dict):
+        raise Bad("character 必须是对象")
+    raw = _strip_underscore(raw)
+    if len(raw) > MAX_CHARACTER_KEYS:
+        raise Bad(f"character 太多键（上限 {MAX_CHARACTER_KEYS}）")
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if k not in character.ALLOWED:
+            # **不列出合法键**：报告不回显正文，键名也算半个正文。
+            raise Bad(f"character 里有不认识的键：{k!r}")
+        if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+            raise Bad(f"character.{k} 只能是数字或字符串")
+        out[k] = str(v).strip()
+        if not out[k]:
+            raise Bad(f"character.{k} 是空的")
+    bad = character.problems(out, now=0)
+    if bad:
+        raise Bad("character 自相矛盾：" + "；".join(bad))
+    return out
+
+
+def _parse_relations(raw, *, generated_at: int) -> dict[str, object]:
+    """关系前史：认识他之前的那部分账。
+
+    **只收"数不出来"的两项**——body_count（人）和 first_time（那时还没有事件）。
+    之后发生的事由 kind='relation' 事件累积，不接受在这里预置：
+    那等于凭空造一段没发生过的历史。
+    """
+    if not isinstance(raw, dict):
+        raise Bad("relations 必须是对象")
+    raw = _strip_underscore(raw)
+    unknown = set(raw) - {"body_count", "first_time"}
+    if unknown:
+        raise Bad(f"relations 有未知字段：{sorted(unknown)}")
+    out: dict[str, object] = {}
+
+    n = raw.get("body_count", 0)
+    if isinstance(n, bool) or not isinstance(n, int):
+        raise Bad("relations.body_count 必须是整数")
+    if not (0 <= n <= MAX_BODY_COUNT):
+        raise Bad(f"relations.body_count 超出 [0, {MAX_BODY_COUNT}]")
+    out["body_count"] = n
+
+    ft = raw.get("first_time")
+    if ft is not None:
+        ms = _parse_ts(ft)
+        if ms is None:
+            raise Bad("relations.first_time 要 YYYY-MM-DD 或毫秒时间戳")
+        if ms > generated_at:
+            raise Bad("relations.first_time 在未来")
+        out["first_time"] = ms
+    return out
+
+
+def _parse_ts(v) -> int | None:
+    """'YYYY-MM-DD' 或毫秒时间戳 -> 毫秒。**只认阳历，和 facts 同一个口径。**"""
+    import datetime as _dt
+
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v if v > 0 else None
+    if not isinstance(v, str):
+        return None
+    try:
+        d = _dt.datetime.strptime(v.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return int(d.timestamp() * 1000)
+
+
+def _check_history(ch: dict[str, str], rel: dict[str, object], *,
+                   generated_at: int) -> None:
+    """前史和生日必须对得上。**跨字段，单看每一份文件都合法。**"""
+    ft = rel.get("first_time")
+    if ft is None:
+        return
+    born = ch.get("birth_date")
+    if not born:
+        return
+    born_ms = _parse_ts(born)
+    if born_ms is None:
+        raise Bad("character.birth_date 要 YYYY-MM-DD")
+    if ft <= born_ms:
+        raise Bad("relations.first_time 早于或等于出生日期")
+    # 笔误拦截，不是道德线：多打/少打一位年份是最常见的错法。
+    if ft - born_ms < MIN_FIRST_AGE * 365 * 86_400_000:
+        raise Bad(f"relations.first_time 对应的年龄小于 {MIN_FIRST_AGE:g} 岁，"
+                  "多半是年份打错了")
 
 
 def describe(b: Bundle, *, inspect: bool = False) -> str:
@@ -169,6 +297,12 @@ def describe(b: Bundle, *, inspect: bool = False) -> str:
         leads = sum(1 for f in b.facts if f.lead_days > 0)
         out.append(f"  固定事实 {len(b.facts)} 条"
                    f"（{leads} 条带提前窗口，{len(b.facts) - leads} 条当天）")
+    if b.character:
+        # **只报数量和键名以外的东西吗？** 键名是字段名（height_cm），不是内容，
+        # 但数值是内容——报告只说几个键。
+        out.append(f"  角色事实 {len(b.character)} 项")
+    if b.relations:
+        out.append("  关系前史 1 段")
     for a in b.actors:
         n = len(a.topics)
         if not n:
@@ -201,7 +335,8 @@ def apply(db, b: Bundle, *, now: int | None = None) -> dict[str, int]:
     from gits.core.db import Writer, now_ms
 
     now = now or now_ms()
-    counts = {"actors": 0, "persona": 0, "topics": 0, "facts": 0}
+    counts = {"actors": 0, "persona": 0, "topics": 0, "facts": 0,
+              "character": 0, "relations": 0}
     for a in b.actors:
         actors.ensure(db, a.actor_id, is_main=a.main, ts=now)
         counts["actors"] += 1
@@ -212,6 +347,21 @@ def apply(db, b: Bundle, *, now: int | None = None) -> dict[str, int]:
         counts["persona"] += 1
         if a.topics:
             counts["topics"] += attention.seed(db, a.actor_id, a.topics, ts=now)
+    if b.character:
+        from gits.memory import character
+
+        for k, v in b.character.items():
+            # src='seed'：来源与节奏表里 manual 的键只认"明确给出"，
+            # 而导入就是明确给出——不是周更"总结"出来的。
+            if character.record(db, key=k, value=v, src="seed", now=now):
+                counts["character"] += 1
+    if b.relations:
+        from gits.memory import relations
+
+        relations.seed(db, now=now,
+                       body_count=int(b.relations.get("body_count") or 0),
+                       first_time=b.relations.get("first_time"))
+        counts["relations"] = 1
     for f in b.facts:
         facts.add(db, subject=f.subject, key=f.key, label=f.label,
                   month=f.month, day=f.day, year=f.year,

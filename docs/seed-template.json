@@ -1,8 +1,25 @@
 {
   "_comment": "初始化包。以 _ 开头的键当注释，导入时忽略。示例包：ephemeral=true，生产导入器默认拒收。",
+  "_character_comment": "角色事实：只放可测量的。导入是唯一一次能塞进一整组数字的地方，所以跨字段自洽检查在这里跑（BMI、腰臀比、胸围差、各部位与身高之比）。任何一条不成立，整份拒收。",
+  "_relations_comment": "关系前史：认识他之前的那部分账。只收数不出来的两项——body_count（人）和 first_time（那时还没有事件）。之后发生的事由 kind='relation' 事件累积，不在这里预置。",
   "format": "gits-seed/1",
   "ephemeral": true,
   "generated_at": 1800000000000,
+  "character": {
+    "birth_date": "1999-11-30",
+    "height_cm": 165,
+    "weight_kg": 52,
+    "bust_cm": 86,
+    "underbust_cm": 75,
+    "waist_cm": 62,
+    "hip_cm": 90,
+    "shoulder_cm": 38,
+    "inseam_cm": 78,
+    "foot_cm": 23.5
+  },
+  "relations": {
+    "body_count": 0
+  },
   "actors": [
     {
       "id": "her",
