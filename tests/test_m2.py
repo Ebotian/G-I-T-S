@@ -68,7 +68,7 @@ def test_互惠系数缺失时用兜底且标注() -> None:
 
 def test_每个决策都带理由() -> None:
     cases = [
-        _good(), _good(unexcluded=0.0), _good(phase_allows=False),
+        _good(), _good(unexcluded=0.0), _good(channel_online=False),
         _good(backlog_pressure=1.0), _good(unexcluded=0.01, resolvable=0.01),
     ]
     for c in cases:
@@ -108,3 +108,29 @@ def test_彼此独立时互惠接近一() -> None:
 def test_样本太少时不给数() -> None:
     her, his = _streams(respond=True, n=5)
     assert elicitation_ratio(her, his) is None
+
+
+def test_开口判据里没有运维姿态(db) -> None:
+    """进程的运行时状态（DRAINING/DOWN）属于调度，不属于「该不该开口」。
+
+    以前这里有一道 `phase_allows`，默认恒为 True——**一票空票**。
+    它看起来像闸门，实际永远开着，而且 reason 里写着两个根本不存在的状态。
+    """
+    from gits.speech.gate import GateInputs
+
+    assert not hasattr(GateInputs(), "phase_allows")
+    import inspect
+
+    from gits.speech import gate as G
+
+    assert "DREAMING" not in inspect.getsource(G)
+    assert "DORMANT" not in inspect.getsource(G)
+
+
+def test_通道不在时仍然不开口() -> None:
+    """删掉姿态不等于删掉所有物理约束——通道是真的会不在的。"""
+    from gits.speech.gate import GateInputs, evaluate
+
+    r = evaluate(GateInputs(unexcluded=1.0, resolvable=1.0,
+                            channel_online=False))
+    assert not r.allow and "出口" in r.reason

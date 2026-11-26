@@ -116,8 +116,7 @@ def _seed_text(db: DB, *, now: int) -> str:
     return (row["payload"] or b"").decode("utf-8", "replace") if row else ""
 
 
-def inputs(db: DB, *, now: int, phase_allows: bool = True,
-           channel_online: bool = True, backlog_pressure: float = 0.0,
+def inputs(db: DB, *, now: int, channel_online: bool = True, backlog_pressure: float = 0.0,
            reciprocity: float | None = None, consecutive: int = 0,
            tau_hours: float = TAU_HOURS,
            actor: str = "her") -> tuple[GateInputs, float, Dangling | None]:
@@ -140,7 +139,7 @@ def inputs(db: DB, *, now: int, phase_allows: bool = True,
     resonance = max((h.sim for h in hits), default=0.0)
 
     return (GateInputs(
-        phase_allows=phase_allows, channel_online=channel_online,
+        channel_online=channel_online,
         unexcluded=best.unexcluded if best else 0.0,
         resolvable=best.resolvable if best else 0.0,
         backlog_pressure=backlog_pressure, reciprocity=reciprocity,

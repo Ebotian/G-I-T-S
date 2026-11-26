@@ -75,7 +75,6 @@ def elicitation_ratio(
 
 @dataclass(frozen=True)
 class GateInputs:
-    phase_allows: bool = True
     channel_online: bool = True
 
     unexcluded: float = 0.0              # 未解释度：当前刺激与已知的偏差
@@ -129,9 +128,15 @@ def threshold_for(pressure: float) -> float:
 
 
 def evaluate(i: GateInputs, *, pressure: float = 0.0) -> GateResult:
-    """顺序有意义：状态 > 通道 > 证据 > 价值。"""
-    if not i.phase_allows:
-        return GateResult(False, 0.0, "状态不允许开口（DREAMING/DORMANT）")
+    """顺序有意义：通道 > 证据 > 价值。
+
+    **没有"姿态"这一道。** 进程的运行时状态（DRAINING/DOWN）属于调度，
+    不属于"该不该开口"——一个正在收尾的进程照样可以发出已经排好队的话。
+    用运维状态管社交行为，是把两件不相干的事绑在一起。
+
+    以前这里有一道 `phase_allows`，默认恒为 True，reason 里写着
+    DREAMING/DORMANT 两个根本不存在的状态：**一票空票**。
+    """
     if not i.channel_online:
         return GateResult(False, 0.0, "没有可用的出口")
     if i.unexcluded <= 0:
