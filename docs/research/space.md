@@ -369,3 +369,42 @@ BoringSSL 系的客户端（Android Conscrypt、Cloudflare 边缘）握手全失
     客户端用 8443   Cloudflare 回源仍然 443（备用端口只对入站生效），于是 525
 
 结论：**橙云 + 源站 443** 是唯一不折腾的组合。
+## 18. 最终形态：Cloudflare 隧道（源站主动出连）
+
+橙云直连失败的原因是**目标不可达**，不是配置：
+
+    抓所有端口 15 秒，同时让 CF 回源    -> 外部 SYN 0 个，CF 仍然回 525
+    我的机器（浙江联通）-> 源站 443     -> 404
+    手机（运营商）      -> 源站 443/8443 -> 404
+
+国内怎么都能到，Cloudflare 一个包都到不了。这是阿里云大陆机器对未备案域名
+的入站拦截，卡在网卡之前——所以抓包看不到、nginx 也不会有日志。
+
+结论：**别让 Cloudflare 连我们，让我们连它。**
+
+    手机 --443--> Cloudflare <==隧道(QUIC 出连)==> cloudflared --> 127.0.0.1:8444
+
+落地：
+
+    tunnel    6b492a97-...（token 放 /etc/cloudflared/token，600，不进仓库）
+    config    /etc/cloudflared/config.yml，两行 ingress：loc.foxtest.icu -> 127.0.0.1:8444
+    服务      cloudflared-gits.service
+    DNS       loc.foxtest.icu CNAME 6b492a97-....cfargotunnel.com（橙云）
+    nginx     停用。TLS 由 Cloudflare 终结，本地这一跳不需要再套一层。
+    ingress   只听 127.0.0.1:8444（GITS_INGRESS_BIND 可覆盖）
+
+实测：
+
+    GET  /      -> 404（空 body）
+    POST /loc   -> 204
+    app        积压的 9 条一次性补发成功，phone 事件 12 -> 21
+
+### 这一路的教训
+
+1. **TLS 不要自己实现。** BoringSSL 客户端（Android、Cloudflare）对 Python/OpenSSL
+   服务端的握手全失败，OpenSSL 客户端（curl）反而正常。换 nginx 之后仍然失败——
+   说明问题不在实现细节，在整条路径。
+2. **curl 能通不代表客户端能通。** 中间可能卡着 DPI、备案过滤、或别的什么。
+3. **抓包比推理快。** 一圈怀疑（证书、VPN、权限、TLS 版本、HTTP 栈）全部排除之后，
+   `tcpdump` 一句话给出了答案：包根本没到。
+4. **源站出连是大陆机器的逃生口。** 入站会被拦，出站不会。

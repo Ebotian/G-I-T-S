@@ -5,7 +5,9 @@ import android.content.SharedPreferences;
 
 /** 配置：一个地址、一把密钥。装完填一次，之后不再碰。 */
 final class Cfg {
-    static final String DEFAULT_URL = "https://loc.foxtest.icu:8443/loc";
+    // 走 Cloudflare 隧道：手机连 CF 的 443，源站主动出连到 CF。
+    // 直连 8443 那条路在移动数据下会 TLS 握手失败（见 docs/research/space.md §16）。
+    static final String DEFAULT_URL = "https://loc.foxtest.icu/loc";
     static final String ACTION_LOC = "com.botian.gitsloc.LOC";
     static final String ACTION_HEARTBEAT = "com.botian.gitsloc.BEAT";
     static final String ACTION_RETRY = "com.botian.gitsloc.RETRY";

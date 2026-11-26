@@ -9,7 +9,7 @@ User=her
 Group=gits
 SupplementaryGroups=gits
 EnvironmentFile=/etc/gits.env
-ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/her/gits.db ingress --port 8443
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/her/gits.db ingress --port 8444
 Restart=always
 RestartSec=5
 

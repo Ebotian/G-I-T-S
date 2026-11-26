@@ -255,7 +255,12 @@ def _log(msg: str) -> None:
 
 def serve(*, db_path: str, secret: str, port: int,
           cert: str | None = None, key: str | None = None) -> None:
-    srv = _Server(("0.0.0.0", port), Handler)
+    # 默认只听本机：前面有 cloudflared（或 nginx）时，端口不该对公网开。
+    # 只有显式设了 GITS_INGRESS_BIND 才绑到别处。
+    import os as _os2
+
+    bind = _os2.environ.get("GITS_INGRESS_BIND") or "127.0.0.1"
+    srv = _Server((bind, port), Handler)
     srv.state = {"db_path": db_path, "verifier": Verifier(secret)}  # type: ignore
     if cert and key:
         import ssl
