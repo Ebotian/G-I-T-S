@@ -76,16 +76,30 @@ def close(db: DB, window_id: int, *, reason: str, ts: int | None = None) -> None
                   (ts or now_ms(), reason, window_id))
 
 
-def record(db: DB, window_id: int, *, tokens: int, hit_tokens: int,
-           event_id: int | None = None) -> None:
-    """记一轮的账。**tokens 用 API 返回的 prompt_tokens**，不估算。"""
-    zero = 1 if hit_tokens <= 0 else 0
+def record(db: DB, window_id: int, *, tokens: int,
+           hit_tokens: int | None, event_id: int | None = None) -> None:
+    """记一轮的账。**tokens 用 API 返回的 prompt_tokens**，不估算。
+
+    hit_tokens=None 表示**命中数不知道**（provider 没返回这个字段）。
+    这必须和"命中 0"分开：以前两者混在一起，缺字段被记成没命中，
+    两轮之后触发"缓存过期"，换窗付全价——**账单上看起来像是缓存坏了，
+    实际是我们在数一个不存在的数**。
+    """
+    known = hit_tokens is not None
+    zero = 1 if (known and int(hit_tokens) <= 0) else 0
     with Writer(db).txn() as c:
         c.execute(
             "UPDATE ctx_windows SET turns=turns+1, tokens=?, hit_tokens=?,"
-            " zero_streak = CASE WHEN ? THEN zero_streak+1 ELSE 0 END,"
+            " known_tokens = known_tokens + ?,"
+            " known_hits = known_hits + ?,"
+            # 不知道的轮次两个都不动：不 +1（它不是没命中），也不清零
+            # （不能假装缓存是好的）。
+            " zero_streak = CASE WHEN ? THEN zero_streak+1"
+            "   WHEN ? THEN 0 ELSE zero_streak END,"
             " last_event_id=COALESCE(?, last_event_id) WHERE id=?",
-            (tokens, hit_tokens, zero, event_id, window_id))
+            (tokens, int(hit_tokens or 0), tokens if known else 0,
+             int(hit_tokens or 0) if known else 0,
+             zero, 1 if known else 0, event_id, window_id))
 
 
 def compact_ms_from_history(db: DB, *, sample: int = 5) -> int:
@@ -110,13 +124,18 @@ def compact_ms_from_history(db: DB, *, sample: int = 5) -> int:
 
 
 def hit_rate(db: DB, *, sample: int = SAMPLE) -> float | None:
+    """命中的比例。**分母只算"命中数确实知道"的轮次。**
+
+    provider 不返回命中字段时返回 None——和 gate 里"互惠系数估不出来"同一个口径：
+    **估不准就返回 None，不要让一个数装作精确**。
+    """
     rows = db.q(
-        "SELECT tokens, hit_tokens FROM ctx_windows WHERE turns > 0"
+        "SELECT known_hits, known_tokens FROM ctx_windows WHERE turns > 0"
         " ORDER BY id DESC LIMIT ?", (sample,))
-    tot = sum(int(r["tokens"]) for r in rows)
+    tot = sum(int(r["known_tokens"]) for r in rows)
     if not tot:
         return None
-    return sum(int(r["hit_tokens"]) for r in rows) / tot
+    return sum(int(r["known_hits"]) for r in rows) / tot
 
 
 def plan(db: DB, *, now: int | None = None, tokens: int | None = None,

@@ -158,11 +158,25 @@ def test_没有悬着的事就不说(db) -> None:
 
 
 def test_憋久了就该开口(db) -> None:
+    """**这里注入 draw，不是固定种子。**
+
+    最终决策要抽一次样（Beta(mean·k)），所以"期望值够"不等于"这一次放行"——
+    用真随机写这条测试，它大约每十几次会红一次，而红的原因是运气。
+    抽样的随机性留在生产里（种子不固定），测试在边界上换掉它。
+    """
     _dangling(db)
     _busy(db)
-    got = I.check(db, now=T0)
+    got = I.check(db, now=T0, draw=lambda mean: mean)
     assert got["pressure"] == pytest.approx(1.0)
     assert got["allow"] is True, got["why"]
+
+
+def test_抽样能把决定翻掉(db) -> None:
+    """抽到的值低，照样不开口——**抽样真的参与判定**，不是装饰。"""
+    _dangling(db)
+    _busy(db)
+    got = I.check(db, now=T0, draw=lambda mean: 0.0)
+    assert got["allow"] is False, got["why"]
 
 
 def test_出口断了就不开口(db) -> None:

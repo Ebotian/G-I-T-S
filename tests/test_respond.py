@@ -129,3 +129,33 @@ def test_额度花光了也照样回复(db, stub) -> None:
     ev = _msg(db, "在吗")
     out = R.respond(db, R.pending(db)[0], model="stub", now=T0)
     assert out is not None and out.outbox_id
+
+
+def test_回复之后留下形状(db, stub) -> None:
+    """**接线要有测试。**没有它，shape.record 写好了也可能没人调。"""
+    _persona(db)
+    _msg(db, "在吗")
+    R.respond(db, R.pending(db)[0], model="stub", now=T0)
+    n = db.scalar("SELECT count(*) FROM events WHERE kind='ctx_shape'")
+    assert n == 1, "回复之后没有留下形状"
+
+
+def test_usage里没有命中字段就算不知道(db, stub, monkeypatch) -> None:
+    """**"不知道"要一路传到底。**桩返回的 usage 没有 prompt_cache_hit_tokens，
+    这不能被记成"0 命中"——否则真实环境里 provider 不报字段时，
+    我们会以为缓存坏了，每两轮换一次窗，一直付全价。"""
+    from gits.speech import ctxwin
+
+    # **必须给 prompt_tokens，否则分母本来就是 0，这条测试分辨不出对错。**
+    monkeypatch.setattr(
+        R, "chat",
+        lambda messages, **kw: Reply(
+            text="嗯。", model="stub",
+            usage={"prompt_tokens": 500, "completion_tokens": 2},
+            latency_ms=1))
+    _persona(db)
+    _msg(db, "在吗")
+    R.respond(db, R.pending(db)[0], model="stub", now=T0)
+    row = ctxwin.current(db)
+    assert int(row["known_tokens"]) == 0, "把未知的命中数算进了分母"
+    assert ctxwin.hit_rate(db) is None

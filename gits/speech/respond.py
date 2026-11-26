@@ -18,7 +18,7 @@ from pathlib import Path
 
 from gits.speech import ctxwin
 from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext,
-                          bucket, messages, render_a)
+                          bucket, messages, render_a, render_b, render_c)
 from gits.core.db import DB, Writer, now_ms
 from gits.speech.llm import Reply, chat, cost_cny
 from gits.memory.recall import lines, recall, reinforce_hits
@@ -95,21 +95,29 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
     hubs 取最近一再出现的实体；它决定她"顺手会提谁"。现在只有计数，
     等抽取攒够了几百条，这里换成中心度会更有意义。
     """
+    # **B 段的每一口输入都只许依赖整点，不许依赖 now。**
+    #
+    # 这句话以前写在文档字符串里，代码没有照做：
+    #   hubs 按 last_touch 排序 —— 每碰一次实体，顺序就可能变
+    #   affect/style 拿 now 进去 —— 情绪是连续衰减的，相邻两轮可能跨过一个分界
+    # 结果就是 system 前缀每轮断一次，而**没有任何东西会报错**——只是命中率
+    # 从 90% 掉到 0，账单解释不了。现在统一折到整点。
+    t = bucket(now) * 3_600_000
     n = db.scalar("SELECT count(*) FROM nodes WHERE kind='episode'") or 0
     first = db.scalar("SELECT min(born_ts) FROM nodes WHERE kind='episode'")
-    days = max(1, ((now or first or now) - (first or now)) // 86_400_000 + 1)
+    days = max(1, ((t or first or t) - (first or t)) // 86_400_000 + 1)
     hubs = tuple(str(r["content"]) for r in db.q(
         "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
-        " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
+        " WHERE n.kind='entity' ORDER BY (n.last_touch / 3600000) DESC, n.id"
+        " LIMIT 3"))
     from gits.social.affect import line as affect_line
     from gits.speech.style import line as style_line
-
 
     return RelationSnapshot(
         bucket=bucket(now),
         summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
-        hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now),
-        style=style_line(db, actor, now=now),
+        hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=t),
+        style=style_line(db, actor, now=t),
     )
 
 
@@ -237,8 +245,19 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
                                            first_event_id=event["id"])}
     ctxwin.record(db, win["id"],
                   tokens=int(reply.usage.get("prompt_tokens") or 0),
-                  hit_tokens=int(reply.usage.get("prompt_cache_hit_tokens") or 0),
+                  # **缺字段就是不知道**，不是 0 命中——两者混在一起会让
+                  # "provider 不报命中"看起来像"缓存坏了"，然后一直换窗付全价。
+                  hit_tokens=(int(reply.usage["prompt_cache_hit_tokens"])
+                              if reply.usage.get("prompt_cache_hit_tokens")
+                              is not None else None),
                   event_id=event["id"])
+
+    # **记下这一轮的形状。** 命中率低的时候，第一个要回答的问题是
+    # "A/B/C 哪一段在动"——没有这个数，只能猜。只存指纹，正文是内容。
+    from gits.speech import shape
+
+    shape.record(db, now=now, a=render_a(seed), b=render_b(snap),
+                 c=render_c(ctx), window_id=win["id"])
 
     # **记账。**回复照记，但**不拦**——"配额不该表现为她坏了"（DESIGN §18.6）。
     # 拦只拦主动开口：那是她自己的开销，说完没人理也照样花。

@@ -51,6 +51,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"A 段={'空（不会说话）' if a is None else 'v' + str(a['version'])}\n"
             f"内容={json.dumps(state, ensure_ascii=False) if state else '{}（干净）'}"
         )
+        # 缓存命中率是**上线后第一个要看的数**：它掉下去的时候，别的东西都还正常。
+        from gits.speech import shape
+
+        import time as _time
+
+        print(shape.line(db, now=int(_time.time() * 1000)))
         # **静默失败要显示。** 后台那几个 except 以前是哑的：
         # 天气挂了三天，系统表现得完全正常，只是从不出声。
         faults = db.q("SELECT ts, payload FROM events WHERE kind='fault'"
@@ -349,6 +355,34 @@ def cmd_world(args: argparse.Namespace) -> int:
         same = ip.get("adcode") == adcode
         print(f"  IP 定位：{ip.get('province')}{ip.get('city')}（{ip.get('adcode')}）"
               f"  {'与配置一致' if same else '与配置不符——IP 是机房位置，以配置为准'}")
+    return 0
+
+
+def cmd_cache(args: argparse.Namespace) -> int:
+    """缓存诊断：命中率 + **是哪一段在动**。
+
+    命中率低的时候，第一个问题不是"怎么调参数"，是"哪一段变了"。
+    没有这个数就只能猜——而猜出来的调参通常会把正常的东西也改掉。
+    """
+    from gits.speech import shape
+
+    db = DB(args.db)
+    now = int(time.time() * 1000)
+    s = shape.stats(db, now=now)
+    hr = "?" if s["hit_rate"] is None else f"{s['hit_rate']:.0%}"
+    print(f"最近 24 小时  {s['turns']} 轮  命中率 {hr}  窗口 {s['windows']} 个")
+    print(f"  A 段（人格）变了 {s['a_versions']} 次")
+    print(f"  B 段（关系/情绪）变了 {s['b_versions']} 次"
+          f"（同一窗口内最多 {s['b_per_window']} 次）")
+    print(f"  C 段（这一轮）变了 {s['c_versions']} 次 —— 每轮都变是正常的")
+    lines = shape.diagnose(db, now=now)
+    if lines:
+        print()
+        for line in lines:
+            print(line)
+    else:
+        print("\n前缀是稳的。")
+    db.close()
     return 0
 
 
@@ -699,6 +733,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--monthly", type=float, default=200.0)
     q.add_argument("--balance", type=float, default=0.0)
     q.set_defaults(fn=cmd_quota)
+    ca = sub.add_parser("cache", help="缓存诊断：命中率 + 哪一段在动")
+    ca.set_defaults(fn=cmd_cache)
 
     sy = sub.add_parser("sync", help="从另一份库拉增量（单向、可断点续传）")
     sy.add_argument("--src", required=True)

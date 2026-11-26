@@ -31,7 +31,7 @@ respond() 支持 proactive 参数，但没人传。决策机制齐了，没人�
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import Any, Callable
 
 from gits.core.db import DB
 
@@ -283,7 +283,8 @@ def next_check(db: DB, *, now: int, actor: str = "her",
 
 
 def check(db: DB, *, now: int, actor: str = "her",
-          channel_online: bool = True) -> dict[str, Any]:
+          channel_online: bool = True,
+          draw: Callable[[float], float] | None = None) -> dict[str, Any]:
     """该不该主动开口。**返回理由，不只是布尔。**"""
     from gits.io import ledger
     from gits.speech import gate
@@ -305,7 +306,10 @@ def check(db: DB, *, now: int, actor: str = "her",
     base = gate.evaluate(inputs, pressure=p)
     # **一次判定只抽一次。** 之前全是分布，这里是唯一一次取值；
     # 抽完就落事件，重放读的是那个结果，不会再抽一次。
-    drawn = sample_value(base.value)
+    #
+    # draw 可以注入：生产永远不传（种子不固定，见 sample_value 的注释），
+    # 测试传一个确定的函数——**随机性在边界上，可以替换，不用被种子锁住**。
+    drawn = (draw or sample_value)(base.value)
     ok = bool(base.allow) and drawn >= gate.threshold_for(p)
     penalty, weight = unanswered(db, now=now, actor=actor)
     return {"allow": ok,

@@ -94,8 +94,10 @@ def _win(db: DB, *, tokens: int = 0, turns: int = 0, zero: int = 0,
          hit: int = 0) -> int:
     wid = ctxwin.open_window(db, ts=T0)
     with Writer(db).txn() as c:
+        # known_tokens 也要设：命中率的分母只算"确实知道命中数"的轮次
         c.execute("UPDATE ctx_windows SET tokens=?, turns=?, zero_streak=?,"
-                  " hit_tokens=? WHERE id=?", (tokens, turns, zero, hit, wid))
+                  " hit_tokens=?, known_tokens=?, known_hits=? WHERE id=?",
+                  (tokens, turns, zero, hit, tokens, hit, wid))
     return wid
 
 
