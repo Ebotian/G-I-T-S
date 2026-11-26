@@ -39,6 +39,12 @@ from gits.core.db import DB
 IDLE_HOURS_FULL = 6.0
 #: 一次"该回却没回"最多扣掉多少（乘以当时的在线概率）。
 UNREPLIED_WEIGHT = 0.45
+#: 他闲够这么久还没回，就算整笔欠下。
+#:
+#: **这个数受在场估计的分辨率限制。** 粗估用的是"这个小时出现过多少消息"，
+#: 而"他回了没"看的也是消息——两者同源，所以"在线却不回"能撑的时间很短，
+#: 通常不超过一小时。拟合出逐小时的率之后这个数可以再调大。
+REPLY_HORIZON_HOURS = 1.0
 #: 多久没回算"没回"
 REPLY_WINDOW_MS = 6 * 3_600_000
 
@@ -75,6 +81,24 @@ def online(db: DB, *, ts: int) -> float:
     return buckets[hour] / (max(buckets) or 1)
 
 
+def opportunity(db: DB, *, start: int, end: int) -> float:
+    """[start, end] 之间他大概闲了几个小时。**压力的原材料，也是欠账的原材料。**
+
+    按小时切、按当时的在线概率加权。两个量用的是同一个积分——
+    区别只在窗口：压力看「距上次开口到现在」，欠账看「说完之后那一段」。
+    """
+    if end <= start:
+        return 0.0
+    hour = 3_600_000
+    acc = 0.0
+    t = start
+    while t < end:
+        span = min(hour, end - t) / float(hour)
+        acc += online(db, ts=t) * span
+        t += hour
+    return acc
+
+
 def pressure(db: DB, *, now: int, actor: str = "her") -> float:
     """攒了多少"闲的时间"。0 = 刚说过，1 = 攒满。
 
@@ -89,13 +113,7 @@ def pressure(db: DB, *, now: int, actor: str = "her") -> float:
     start = last[0]
     if now <= start:
         return 0.0
-    acc = 0.0
-    hour = 3_600_000
-    t = start
-    while t < now:
-        span = min(hour, now - t) / float(hour)
-        acc += online(db, ts=t) * span
-        t += hour
+    acc = opportunity(db, start=start, end=now)
     return max(0.0, min(1.0, acc / IDLE_HOURS_FULL))
 
 
@@ -116,9 +134,12 @@ def unanswered(db: DB, *, now: int, actor: str = "her",
             (ts, ts + window))
         if replied:
             continue
-        p = online(db, ts=ts)
-        factor *= max(0.0, 1.0 - UNREPLIED_WEIGHT * p)
-        weight += p
+        # **欠账也是那个积分**：说完之后他闲了几个小时。
+        # 归一化到 REPLY_HORIZON——他闲够两个钟头还没回，就算整笔欠下。
+        idle = opportunity(db, start=ts, end=min(now, ts + window))
+        debt = min(1.0, idle / REPLY_HORIZON_HOURS)
+        factor *= max(0.0, 1.0 - UNREPLIED_WEIGHT * debt)
+        weight += debt
     return (factor, weight)
 
 

@@ -162,3 +162,54 @@ def test_出口断了就不开口(db) -> None:
     got = I.check(db, now=T0, channel_online=False)
     assert got["allow"] is False
     assert "出口" in got["why"]
+
+
+# ── 欠账和压力是同一个积分 ──────────────────────────────────
+
+
+def test_欠账也是积分出来的(db) -> None:
+    """**同一种量，不同窗口。** 说得通才不是两套逻辑各算各的。"""
+    _busy(db)
+    # 17:30 说了一句：他在 17 点那个小时是活跃的，但之后到第二天都没有消息
+    said = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
+    I.record(db, now=said, reason="x", candidate=None)
+    idle = I.opportunity(db, start=said, end=said + 6 * HOUR)
+    assert idle > 0.2, idle
+    factor, weight = I.unanswered(db, now=said + 8 * HOUR)
+    assert weight > 0, "他在线却没回，应该欠一笔"
+    assert factor < 1.0, "欠了却没罚"
+    # 罚的分量来自同一个积分，不是另算一个数
+    assert weight == pytest.approx(min(1.0, idle / I.REPLY_HORIZON_HOURS))
+
+
+def test_他没闲过就不算欠(db) -> None:
+    """他整段时间都不在线，沉默完全在预期里 —— 一笔也不欠。"""
+    _busy(db, hours=(15,))
+    night = int(dt.datetime(2026, 11, 26, 1, 0).timestamp() * 1000)
+    I.record(db, now=night, reason="x", candidate=None)
+    idle = I.opportunity(db, start=night, end=night + 6 * HOUR)
+    assert idle == pytest.approx(0.0), idle
+    factor, weight = I.unanswered(db, now=night + 8 * HOUR)
+    assert weight == pytest.approx(0.0)
+    assert factor == pytest.approx(1.0), "不该罚"
+
+
+def test_闲得越久欠得越多(db) -> None:
+    """欠账随「他闲了多久」连续增长，不是 0/1 跳变。"""
+    _busy(db, hours=(15,))
+    base = int(dt.datetime(2026, 11, 26, 15, 0).timestamp() * 1000)
+    I.record(db, now=base, reason="x", candidate=None)
+    soon = I.unanswered(db, now=base + 30 * 60_000)[0]
+    later = I.unanswered(db, now=base + 5 * HOUR)[0]
+    assert later < soon < 1.0, (soon, later)
+
+
+def test_欠账要归一化_一直在也不该无限罚(db, monkeypatch) -> None:
+    """他整六小时都在线却没回，和他在线一小时没回，罚应该一样重——
+    **归一化到 REPLY_HORIZON，不是越长欠越多。** 否则久了会把话说死。"""
+    _busy(db)
+    monkeypatch.setattr(I, "online", lambda db, ts: 1.0)
+    said = int(dt.datetime(2026, 11, 26, 1, 0).timestamp() * 1000)
+    I.record(db, now=said, reason="x", candidate=None)
+    _factor, weight = I.unanswered(db, now=said + 8 * HOUR)
+    assert weight == pytest.approx(1.0), weight
