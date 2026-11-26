@@ -221,3 +221,53 @@ AutoFE（featuretools / 自动特征生成）的前提是**样本量能压住搜
     产出    "这个特征值不值得"，而不是"这个模型好不好"
 
 这和 AutoFE 的区别不是自动化程度，是**搜索空间有边界**。边界内的搜索可以审计。
+
+## 14. 入口：唯一对公网开的那道门
+
+手机上报有两条通道：SSH（Termux 那条）和 HTTPS（给 app 用）。两条都落到
+world/loc.py 的同一个入口，所以它们不会分叉。
+
+    路径    只认 POST /loc。其他一律 404，**空 body**——不回版本号、不回错误信息，
+            甚至不告诉你路由在不在。
+    签名    HMAC-SHA256(secret, ts|body)，+/-5 分钟窗口
+    重放    同一组 (ts, sig) 只接受一次
+    报文    <= 512 B
+    限流    每来源 IP 30 次/分钟
+
+它不是"另一个 API"，它是门。扫到端口的人拿不到任何东西。
+
+### 14.1 为什么不用 80/443
+
+大陆 ECS 对**未备案域名**会拦 80/443。走 8443 一次避开两件事：
+备案检查，以及"要不要开 80 做 HTTP-01"。
+
+### 14.2 证书：DNS-01，不碰 80
+
+域名 foxtest.icu 在 Cloudflare 上，DNS-01 用它的 API 签，不需要任何入站端口：
+
+    certbot certonly --dns-cloudflare \
+      --dns-cloudflare-credentials /root/.secrets/cf.ini \
+      -d loc.foxtest.icu --non-interactive
+
+Cloudflare 那边 A 记录必须是**灰云（DNS only）**。橙云会把流量引到 Cloudflare，
+位置数据就多经过一个厂商——这条是有意的，不是配置疏忽。
+
+### 14.3 证书不能直接给 her 读
+
+/etc/letsencrypt 是 root 700。所以用 certbot 的 deploy hook 拷一份过去：
+
+    /etc/letsencrypt/live/loc.foxtest.icu/fullchain.pem
+      -> /var/lib/gits/shared/tls/loc.crt   640 her:gits
+    /etc/letsencrypt/live/loc.foxtest.icu/privkey.pem
+      -> /var/lib/gits/shared/tls/loc.key   600 her:gits
+    然后 systemctl restart gits-ingress
+
+放在 renewal-hooks/deploy/ 下，续期时自动执行。
+
+### 14.4 多线程 + sqlite：每个请求一条连接
+
+入口是多线程的，而 sqlite 连接不能跨线程。第一版把 DB 放在 server.state 里，
+端到端测试直接返回 404——**异常被吞掉了，看起来像"路由不对"**。
+
+这也是为什么 do_POST 里那个 except 只回 404 不打印：对外不回内容是对的，
+但调试时必须能从服务端日志看到。现在这条没有日志——**是个待补的洞**。
