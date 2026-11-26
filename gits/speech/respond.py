@@ -81,6 +81,10 @@ def recent(db: DB, *, actor: str = "her", from_id: int | None = None,
     return tuple(out)
 
 
+#: C 段里放几条记忆。频带分配的上限就是这个数。
+SLOTS = 5
+
+
 def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
     """B 段。**一小时内逐字不变**——所以只能放"这个小时都成立"的东西。
 
@@ -125,8 +129,15 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
                      until_id=event["id"])
     seed = persona or load_persona(db)
     snap = relation(db, now=now, actor=actor)
-    hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
-                  now_ms=now, k=5)
+    # 先宽召回，再按频谱分配——直接把 k 当条数会让同一个频带被填满。
+    wide = recall(db, text, actor=actor,
+                  context=" ".join(t for _w, t in history),
+                  now_ms=now, k=SLOTS * 3)
+    from gits.memory.spectrum import allocate
+    from gits.social.affect import distribution as affect_dist
+
+    mood = affect_dist(db, actor, now=now)
+    hits = allocate(db, wide, slots=SLOTS, arousal=mood["arousal"])
     from gits.speech.facts import lines as fact_lines
 
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
