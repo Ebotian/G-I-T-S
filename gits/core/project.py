@@ -114,7 +114,10 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
     kind = row["kind"]
     ts = row["ts"]
     nid = node_id_for(row["source"], row["ext_id"])
-    scope = "self:her" if kind == "inner" else "world"
+    # **作用域跟着事件走。**以前一律写 world / self:her，
+    # 于是 peer 的私信（scope=self:peer1）投影成 world——别的实例能检索到。
+    ev_scope = str(row["scope"] or "") if "scope" in row.keys() else ""
+    scope = ev_scope or ("self:her" if kind == "inner" else "world")
 
     # 这条**消息自己**的情感强度 → 影响编码（存得多牢）。
     # 注意不是「她此刻的心情」——那是检索的事（见 recall.py）。
@@ -139,10 +142,10 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
             "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch,"
             " touch_day, touch_n)"
             " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
-            (nid_, "entity", ts, "world", 1.0, 1.0, ts, _day(ts), 0))
+            (nid_, "entity", ts, scope, 1.0, 1.0, ts, _day(ts), 0))
         # 同日重复：**确实巩固了一次**（w17/w18 的短期记忆项），
         # 但它不算「独立重述」——两件事，两个参数，各管各的。
-        from gits.memory.fsrs import SHORT_TERM_CAP, same_day_boost
+        from gits.memory.fsrs import SHORT_TERM_STEPS, same_day_boost
 
         cur = conn.execute(
             "SELECT touch_day, touch_n, s FROM nodes WHERE id=?", (nid_,)).fetchone()
@@ -151,7 +154,11 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
             if cur[0] == day:
                 n = int(cur[1] or 0)
             s_cur = float(cur[2] or 1.0)
-            new_s = min(s_cur * same_day_boost(n + 1), SHORT_TERM_CAP)
+            # **只加不减。**早先是 min(s*boost, CAP)，于是 s=9 的实体
+            # 第二天被提一次就掉到 4——把已经巩固的东西变弱了。
+            # 现在上限落在「当天增量的次数」上，不是稳定性的绝对值。
+            boost = same_day_boost(n + 1) if n < SHORT_TERM_STEPS else 1.0
+            new_s = max(s_cur, s_cur * boost)
             conn.execute(
                 "UPDATE nodes SET touch_day=?, touch_n=?, s=?, last_touch=?"
                 " WHERE id=?", (day, n + 1, new_s, ts, nid_))
@@ -171,12 +178,22 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
 
         add_edge(conn, src=a, dst=b, kind=edge_kind, ts=ts, w=w)
 
+    # 同一条消息里，同一个实体可能既出现在 entities 里、又出现在 claims 里。
+    # 以前各 touch 一次，一条消息算两次提及（实测六条消息记了十二次）。
+    touched: set[str] = set()
+
+    def touch_once(nid_: str, name: str) -> None:
+        if nid_ in touched:
+            return
+        touched.add(nid_)
+        touch(nid_, name)
+
     for e in payload.get("entities") or []:
         name = str(e.get("name", "")).strip() if isinstance(e, dict) else str(e).strip()
         if not name:
             continue
         eid = entity_id(name)
-        touch(eid, name)
+        touch_once(eid, name)
         # 这件事提到了这个实体——边是「共同出现」，不是「是」。
         link(nid, eid, 1.0, "mentions")
 
@@ -189,8 +206,8 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
         if not (subj and obj and pred):
             continue
         a, b = entity_id(subj), entity_id(obj)
-        touch(a, subj)
-        touch(b, obj)
+        touch_once(a, subj)
+        touch_once(b, obj)
         link(a, b, 0.5, f"rel:{pred[:24]}")
     return nid
 
@@ -201,6 +218,19 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "reinforce":
+        # 检索强化：**必须是事件**，否则夜里 replay --restore 会把它抹掉。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            return
+        nid = obj.get("node")
+        if not nid or obj.get("s") is None:
+            return
+        conn.execute("UPDATE nodes SET s=?, d=?, last_touch=? WHERE id=?",
+                     (float(obj["s"]), obj.get("d"),
+                      int(obj.get("ts") or row["ts"]), nid))
+        return
     if row["kind"] == "alias":
         # 实体别名：查图时先把别名展开成同一族（semantic.family）。
         try:
@@ -335,7 +365,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
 
     sql = ("SELECT * FROM events WHERE kind IN"
            " ('msg_in','inner','consolidate','persona','funnel','seed','fact',"
-           "  'alias')")
+           "  'alias','reinforce')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -355,7 +385,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
                         if row["kind"] in ("consolidate", "persona", "funnel",
-                                           "seed", "fact", "alias")
+                                           "seed", "fact", "alias", "reinforce")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(

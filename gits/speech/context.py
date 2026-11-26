@@ -158,7 +158,9 @@ def messages(seed: PersonaSeed, snap: RelationSnapshot, ctx: TurnContext,
 
     之前把「刚才几轮」写进 system，于是前缀每轮都断——实测命中率 0。
     """
-    parts = [p for p in (ctx.recalled and "# 你想起来的事" or "",
+    parts = [p for p in (ctx.due and "# 日子" or "",
+                         *ctx.due,
+                         ctx.recalled and "# 你想起来的事" or "",
                          *[f"- {r}" for r in ctx.recalled],
                          ctx.quota_hint, "# 现在", ctx.stimulus.strip()) if p]
     out: list[dict] = [{"role": "system", "content": render_a(seed) + render_b(snap)}]

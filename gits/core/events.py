@@ -101,6 +101,9 @@ def import_logset(db: DB, payload: dict, *, writer: Writer | None = None) -> dic
             source=row["source"], kind=row["kind"], ext_id=row["ext_id"],
             ts=row["ts"], recv_ts=row["recv_ts"], node_id=row["node_id"],
             payload=_dec(row.get("payload")),
+            # **作用域必须跟着走**：不带的话，私有的种子同步过去就成了公开的，
+            # 它所属的实例反而读不到自己的东西。
+            scope=str(row.get("scope") or "world"),
         )
         counts["events"] = counts.get("events", 0) + (1 if created else 0)
 

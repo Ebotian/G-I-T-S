@@ -137,8 +137,9 @@ def build(times_ms: list[int], *, corrections: set[int] | None = None) -> Memory
 AROUSAL_GAIN = 0.5
 #: 心情一致性对检索打分的增益上限（只影响排序，不删候选）
 MOOD_GAIN = 0.3
-#: 同一天最多巩固到几倍（见 same_day_boost 的递减）
-SHORT_TERM_CAP = 4.0
+#: 同一天最多巩固几次。之后不再加深——一个下午说三十遍，前六遍就够了。
+#: （这不是稳定性的绝对上限，是**当天增量的次数上限**。）
+SHORT_TERM_STEPS = 6
 
 
 def short_term_factor() -> float:

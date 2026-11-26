@@ -127,7 +127,8 @@ def current(db: DB, *, actor: str = "her") -> dict | None:
     return {"event_id": int(row["id"]),
             "narrative": str(obj.get("narrative", "")),
             "version": int(obj.get("version", 0)),
-            "picked": list(obj.get("picked") or [])}
+            "picked": list(obj.get("picked") or []),
+            "inputs": list(obj.get("inputs") or [])}
 
 
 def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
@@ -139,10 +140,12 @@ def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
         return None
 
     prev = current(db, actor=actor)
-    # **输入没变就别重写一遍。** 只有一个候选节点的夜里，重写出来的是
-    # 同一段意思的另一种说法——那是 churn，不是变化。
-    # 顺带保住了缓存：A 段逐字不变，前缀不用重建。
-    if prev and prev.get("picked") and prev["picked"] == [p["id"] for p in picked]:
+    # **输入没变就别重写一遍。**
+    #
+    # 比的是 inputs（纯候选），不是 picked——后者还包含临时追加的上一版叙事，
+    # 拿它比会永远不相等，于是每晚都重写一次。
+    sig = [p["id"] for p in picked]
+    if prev and prev.get("inputs") and list(prev["inputs"]) == sig:
         return None
     version = (prev["version"] + 1) if prev else 0
     if prev and prev["narrative"]:
@@ -164,7 +167,9 @@ def snapshot(db: DB, *, actor: str = "her", now: int | None = None,
     ev, _ = Writer(db).append_event(
         source="ghost", kind="persona", ext_id=f"persona-v{version}-{now}",
         ts=now, recv_ts=now, scope=self_of(actor),
+        # inputs = 纯候选（判断输入变没变）；picked = 含上一版叙事（看它从哪来）
         payload=json.dumps({"narrative": narrative, "version": version,
+                            "inputs": sig,
                             "picked": [p["id"] for p in picked]},
                            ensure_ascii=False).encode())
     Writer(db).append_model_call(kind="persona", model=reply.model,

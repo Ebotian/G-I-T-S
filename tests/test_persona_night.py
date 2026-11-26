@@ -230,3 +230,30 @@ def test_候选变了就重写(db, monkeypatch) -> None:
     # 两个节点 + 上一版叙事（自反：昨晚那版今天还在输入里）
     assert got is not None and len(got.picked) == 3
     assert any("persona" in p for p in got.picked)
+
+
+def test_候选没变就不会重写第二次(db, monkeypatch) -> None:
+    """以前拿 picked 比——它还包含临时追加的上一版叙事，永远不相等。"""
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "第一版。")
+    assert persona.snapshot(db, now=T0) is not None
+    calls = _chat(monkeypatch, "第二版。")
+    assert persona.snapshot(db, now=T0 + DAY) is None
+    assert calls == [], "输入一模一样，不该再调一次模型"
+
+
+def test_inputs_和_picked_分开记(db, monkeypatch) -> None:
+    import json as _j
+
+    _self_node(db, "n:a", "他讨厌没有结论的会")
+    _chat(monkeypatch, "第一版。")
+    persona.snapshot(db, now=T0)
+    # 第二次要真的发生，才谈得上「上一版进了 picked」
+    _self_node(db, "n:b", "他说想换个城市")
+    _chat(monkeypatch, "第二版。")
+    persona.snapshot(db, now=T0 + DAY)
+    ev = db.one("SELECT payload FROM events WHERE kind='persona'"
+                " ORDER BY id DESC LIMIT 1")
+    obj = _j.loads(ev["payload"])
+    assert obj["inputs"] == ["n:a", "n:b"], "纯候选"
+    assert any("persona" in p for p in obj["picked"]), "picked 里有上一版"

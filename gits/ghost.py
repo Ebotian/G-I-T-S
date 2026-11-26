@@ -259,10 +259,14 @@ class Ghost:
         if plan.action in ("compact_idle", "compact_force"):
             # **整理不在心跳线程里跑。** 它要一次 thinking=high 的调用（几秒到几十秒），
             # 放在 tick 里等于这段时间他不回话。
-            if self._compact_future is not None and not self._compact_future.done():
-                return ""
+            if self._compact_future is not None:
+                if not self._compact_future.done():
+                    return ""
+                exc = self._compact_future.exception()   # 不读就永远不知道它炸了
+                if exc is not None:
+                    self.last_error = f"compact: {type(exc).__name__}: {exc}"
             self._compact_future = self._pool.submit(
-                compact, self.db, now=t, reason=plan.reason)
+                _compact_off_thread, str(self.db.path), t, plan.reason)
             return f"{plan.action} 已交给后台"
         elif plan.action == "new_window":
             ctxwin.new_window(self.db, ts=t, reason=plan.reason)
@@ -299,6 +303,24 @@ class Ghost:
             return 0
         self.last_error = ""
         return len(turns)
+
+
+def _compact_off_thread(db_path: str, now: int, reason: str) -> str:
+    """在线程里**开自己的连接**。
+
+    sqlite3 的连接默认绑定创建它的线程，把主线程的 DB 交给线程池会直接
+    ProgrammingError——而且主循环只检查 future.done()，异常从此没人读。
+    这里自己开一条：单写者的纪律靠 BEGIN IMMEDIATE + busy_timeout 保证，
+    不靠"只能有一个连接"。
+    """
+    from gits.memory.compact import compact
+
+    db = DB(db_path)
+    try:
+        got = compact(db, now=now, reason=reason)
+        return "" if got is None else f"窗 {got.window_id}"
+    finally:
+        db.close()
 
 
 async def serve(db_path: str | Path, *, node: str = "cloud",

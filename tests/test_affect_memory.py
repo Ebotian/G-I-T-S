@@ -86,7 +86,8 @@ def test_一个下午三十条不会把稳定性顶到三十倍(db) -> None:
     for i in range(30):
         _apply(db, f"m{i}", T0 + i * 60_000, entities=["那个 PR"])
     s = db.scalar("SELECT s FROM nodes WHERE kind='entity'")
-    assert s <= fsrs.SHORT_TERM_CAP, f"被顶到 {s} 了"
+    # 同一天只巩固前 SHORT_TERM_STEPS 次，之后不再加深
+    assert s < 3.0, f"三十条把稳定性顶到 {s} 了"
     assert s > 1.0, "但也不该毫无贡献"
 
 

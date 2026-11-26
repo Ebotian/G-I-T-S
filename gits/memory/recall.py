@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from gits.core.db import DB, Writer
@@ -169,9 +170,20 @@ def reinforce_hits(db: DB, rows: list[Recalled], *, now_ms: int,
         if row is None or row["last_touch"] is None or not row["s"]:
             continue
         s_new, d_new = reinforce(float(row["s"]), row["d"], float(r.r))
+        # **落成事件，不是直接改节点。**夜里 housekeep 会跑 replay --restore，
+        # 直接改的 s 一夜之间就被抹掉了。
+        from gits.core import project
+
+        ext = f"reinforce-{r.node_id}-{now_ms}-{n}"
+        payload = json.dumps({"node": r.node_id, "s": s_new, "d": d_new,
+                              "ts": now_ms}, ensure_ascii=False)
+        Writer(db).append_event(source="recall", kind="reinforce", ext_id=ext,
+                                ts=now_ms, recv_ts=now_ms, scope="world",
+                                payload=payload.encode())
+        shape = {"kind": "reinforce", "source": "recall", "ext_id": ext,
+                 "ts": now_ms, "scope": "world"}
         with Writer(db).txn() as c:
-            c.execute("UPDATE nodes SET s=?, d=?, last_touch=? WHERE id=?",
-                      (s_new, d_new, now_ms, r.node_id))
+            project._apply(c, shape, payload)
         n += 1
     return n
 

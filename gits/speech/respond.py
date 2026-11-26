@@ -142,13 +142,15 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
                       due=fact_lines(db, now))
-    # **被用上了才算一次练习**（spacing effect）。放在这里而不是 recall() 里：
-    # 读路径不写库，而且「召回了但没进上下文」不该算。
-    reinforce_hits(db, hits, now_ms=now)
     prompt = assemble(seed, snap, ctx)
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
     reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
+
+    # **成功之后才强化**（spacing effect）。放在模型调用之前的话，
+    # 一次失败的请求也会把 s 顶上去——那条记忆其实没被用上。
+    # 强化落成事件，所以夜里的 replay --restore 不会把它抹掉。
+    reinforce_hits(db, hits, now_ms=now)
 
     # 记账：窗口长度和命中数都用 API 返回的，不估算（估错了预算就假了）。
     win = win or {"id": ctxwin.open_window(db, ts=now,
