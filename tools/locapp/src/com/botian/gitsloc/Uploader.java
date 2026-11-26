@@ -9,14 +9,17 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.FileReader;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
+import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 import javax.crypto.Mac;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
 import javax.crypto.spec.SecretKeySpec;
 
 /**
@@ -105,32 +108,59 @@ final class Uploader {
         am.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + delay, pi);
     }
 
-    /** 一次同步投递。**没有异常逃出去**——广播接收器里不能崩。 */
+    /**
+     * 一次同步投递。**不走 HttpsURLConnection。**
+     *
+     * 用裸 SSLSocket 手写 HTTP/1.1。原因不是偏好，是被逼的：
+     * HttpURLConnection 在这台机器上稳定报 SSLHandshakeException /
+     * Connection reset，而同一台手机上 Termux 的 curl 每次都成功——
+     * 说明网络和证书都没问题，问题出在那层 HTTP 栈（ALPN、连接复用、
+     * 预连接探测，任何一个都可能是原因，而且都不可控）。
+     *
+     * 裸 socket 的行为是确定的：连、握、写、读一行状态码、关。
+     */
     static boolean post(Context c, String body) {
-        HttpURLConnection conn = null;
+        SSLSocket sock = null;
         try {
             String secret = Cfg.secret(c);
             if (secret.isEmpty()) {
                 Cfg.note(c, "没填密钥");
                 return false;
             }
+            URL u = new URL(Cfg.url(c));
+            String host = u.getHost();
+            int port = u.getPort() > 0 ? u.getPort() : 443;
+            String path = u.getPath().isEmpty() ? "/" : u.getPath();
             long ts = System.currentTimeMillis();
             byte[] payload = body.getBytes(StandardCharsets.UTF_8);
             String sig = hmac(secret, ts + "|" + body);
-            URL url = new URL(Cfg.url(c));
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(15000);
-            conn.setReadTimeout(20000);
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setFixedLengthStreamingMode(payload.length);
-            conn.setRequestProperty("Content-Type", "application/json");
-            conn.setRequestProperty("X-Ts", Long.toString(ts));
-            conn.setRequestProperty("X-Sig", sig);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(payload);
+
+            SSLSocketFactory f = (SSLSocketFactory) SSLSocketFactory.getDefault();
+            sock = (SSLSocket) f.createSocket();
+            sock.connect(new InetSocketAddress(host, port), 15000);
+            sock.setSoTimeout(20000);
+            sock.startHandshake();
+
+            String head = "POST " + path + " HTTP/1.1\r\n"
+                    + "Host: " + host + "\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "X-Ts: " + ts + "\r\n"
+                    + "X-Sig: " + sig + "\r\n"
+                    + "Content-Length: " + payload.length + "\r\n"
+                    + "Connection: close\r\n\r\n";
+            OutputStream os = sock.getOutputStream();
+            os.write(head.getBytes(StandardCharsets.UTF_8));
+            os.write(payload);
+            os.flush();
+
+            BufferedReader r = new BufferedReader(
+                    new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
+            String status = r.readLine();
+            int code = 0;
+            if (status != null && status.startsWith("HTTP/")) {
+                String[] parts = status.split(" ");
+                if (parts.length > 1) code = Integer.parseInt(parts[1]);
             }
-            int code = conn.getResponseCode();
             if (code == 204) {
                 Cfg.stamp(c, "ok");
                 Cfg.note(c, "");
@@ -142,8 +172,6 @@ final class Uploader {
             android.util.Log.w("gitsloc", "HTTP " + code);
             return false;
         } catch (Exception e) {
-            // 诊断用：类名 + 消息 + 根因。原来只存类名，"SSLHandshakeException"
-            // 这一条什么也说明不了——是链的问题、时间的问题、还是被中间人拦了。
             Throwable root = e;
             while (root.getCause() != null) root = root.getCause();
             String msg = e.getClass().getSimpleName() + ": " + e.getMessage()
@@ -152,7 +180,12 @@ final class Uploader {
             android.util.Log.w("gitsloc", msg);
             return false;
         } finally {
-            if (conn != null) conn.disconnect();
+            if (sock != null) {
+                try {
+                    sock.close();
+                } catch (Exception ignored) {
+                }
+            }
         }
     }
 

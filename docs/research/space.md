@@ -303,3 +303,42 @@ Cloudflare 那边 A 记录必须是**灰云（DNS only）**。橙云会把流量
     脚本             gits-loc.sh / gits-loc-loop.sh 都在（只是不开机自启）
 
 app 出问题时，把 boot 脚本挪回去重启手机就能接上，不需要重新配任何东西。
+## 16. 移动数据下 TLS 被重置：还没解决，但范围收窄了
+
+### 现象
+
+    app       SSLHandshakeException: connection closed / SocketException: Connection reset
+    Termux    curl 每次都成功（TLSv1.3，证书校验通过）
+    httpbin   app 打 https://httpbin.org/post 返回 200 —— **app 的 TLS 栈没问题**
+    服务端    [ingress] TLS 握手失败 from <手机IP>: Closed before TLS handshake with data in recv buffer
+
+客户端看到 RST、服务端看到 EOF——两边同时被切断，这是**路径上有人**的典型形状。
+
+### 排除掉的
+
+| 怀疑 | 怎么排除的 |
+|---|---|
+| 证书链 | 只发 3 条（leaf + YR1 + root）；curl 校验通过 |
+| 端口不通 | Termux curl 到 8443 成功，tcp-ok |
+| VPN / Clash | 停掉 Clash、tun0 消失后仍然失败 |
+| 数据节省 / 联网控制 | data_saver 关，netpolicy UID 10341 effective=NONE |
+| INTERNET 权限 | granted=true |
+| TLS 版本 | 服务端锁到 1.2 也失败 |
+| HTTP 栈 | 换成裸 SSLSocket 也失败 |
+| 服务端单线程握手 | 已修（握手挪到工作线程），失败形状不变 |
+
+### 还没排除的
+
+**运营商路径上的 DPI。** 指向它的证据是时间线：app 唯一成功的那三条（id=10/11/12，16:05-16:16）
+是在 Clash 开着的时候；关掉之后一次都没成功过。curl 的 ClientHello 是常见的指纹，
+Conscrypt 的带着后量子密钥分享（MLKEM），有些 DPI 盒子会对不认识的扩展直接回 RST。
+
+### 下一步（两条，都要你点头）
+
+1. **换 443**：SG 放行 443，服务改成监听 443（systemd 里加
+   AmbientCapabilities=CAP_NET_BIND_SERVICE）。DPI 对 443 通常最宽松。
+   风险：阿里云对未备案域名的 80/443 有拦截，可能直接不通——一测就知道。
+2. **Cloudflare 橙云**：客户端连 443 到 Cloudflare，Cloudflare 回源到 8443。
+   不用改 SG，立刻能验证 DPI 猜想；代价是位置数据经过 Cloudflare 一跳。
+
+我的建议：先试 1（数据不经第三方），不行再试 2 验证猜想。
