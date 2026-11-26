@@ -246,6 +246,36 @@ def cmd_ingress(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_relation(args) -> int:
+    """记一次 / 看账本。**只能加，不能改，不能减。**"""
+    from gits.memory import relations as R
+
+    db = DB(args.db)
+    now = int(time.time() * 1000)
+    if not args.action:
+        c = R.counters(db, now=now)
+        if not c:
+            print("  账本是空的")
+        for k, v in sorted(c.items()):
+            print(f"  {k:14s} {v}")
+        db.close()
+        return 0
+    if args.action == "seed":
+        ev = R.seed(db, now=now, body_count=args.count or 0)
+        print(f"  前史记下了：body_count={args.count or 0}" if ev else "  拒收")
+        db.close()
+        return 0
+    ev = R.record(db, action=args.action, now=now,
+                  partner=args.partner, src="manual")
+    if ev is None:
+        print(f"  拒收：动作不在 {sorted(R.ACTIONS)} 里，或名字不像名字")
+        db.close()
+        return 2
+    print(f"  记下了：{args.action}")
+    db.close()
+    return 0
+
+
 def cmd_character(args: argparse.Namespace) -> int:
     """角色事实：年龄推导，其余可读写。**是记录，不是记忆。**"""
     import time
@@ -650,6 +680,12 @@ def build_parser() -> argparse.ArgumentParser:
     ch.add_argument("key", nargs="?")
     ch.add_argument("value", nargs="?")
     ch.set_defaults(fn=cmd_character)
+    rl = sub.add_parser("relation", help="关系账本：只能加，不能改，不能减")
+    rl.add_argument("action", nargs="?", default=None,
+                    help="meet|kiss|confess|intimacy|breakup|seed，不给就看账本")
+    rl.add_argument("partner", nargs="?", default="他")
+    rl.add_argument("--count", type=int, default=0, help="seed 用：前史次数")
+    rl.set_defaults(fn=cmd_relation)
     wd = sub.add_parser("world", help="外面的世界：天气/位置（读数是事件）")
     wd.add_argument("--fetch", action="store_true", help="现在去取一次")
     wd.add_argument("--verify-location", action="store_true",

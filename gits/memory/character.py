@@ -150,6 +150,11 @@ def record(db: DB, *, key: str, value: Any, src: str = "seed",
     key = (key or "").strip()
     if key not in ALLOWED:
         return None
+    # **来源与节奏必须匹配。** 周更（src='dream'）只许动 weekly 键；
+    # manual 的键只有"明确给出"能写。否则模型周更时说一句就能改生日，
+    # 而 CADENCE 表就只是注释了。
+    if src == "dream" and CADENCE.get(key) != "weekly":
+        return None
     text = str(value).strip()
     if not text:
         return None

@@ -474,3 +474,12 @@ def test_成年后连降也不许(db) -> None:
     ok, why = C.bounded(db, key="height_cm", value=164.5, now=T0)
     assert ok is False
     assert "只能不降" in why or "上限 0.00" in why
+
+
+def test_来源与节奏不匹配就拒(db) -> None:
+    """周更（src='dream'）不许动 manual 键——哪怕绕过了 ghost 那道判定。"""
+    assert C.record(db, key="birth_date", value="2001-01-01",
+                    src="dream", now=T0) is None
+    assert "birth_date" not in C.current(db)
+    assert C.record(db, key="birth_date", value="2001-01-01",
+                    src="manual", now=T0) is not None

@@ -171,6 +171,13 @@ def _prepare(db: DB, *, now: int, actor: str, stimulus: str,
     from gits.memory import character
 
     self_facts = character.line(db, now=now) if fresh_window else ""
+    # 关系账本和角色事实同一块：**数字，不是句子**。空账不出现在上下文里。
+    from gits.memory import relations
+
+    if fresh_window:
+        rel = relations.brief(db, now=now)
+        if rel:
+            self_facts = (self_facts + chr(10) if self_facts else "") + rel
 
     background = brief_text(db, now=now, actor=actor, head=fresh_window)
     if self_facts:
