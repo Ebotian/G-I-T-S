@@ -170,8 +170,13 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     # 它只认 gits.world.brief_text() 这一个入口。
     from gits.world import brief_text
 
+    # **拼接规则只在新开上下文时出现一次**：之后每轮只追加数据，不重复规则。
+    # 重复一遍就是白烧 token，还会让模型以为这是新一轮的指令。
+    fresh_window = not history
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
-                      due=due, background=brief_text(db, now=now, actor=actor))
+                      due=due,
+                      background=brief_text(db, now=now, actor=actor,
+                                            head=fresh_window))
     # 只要 A 段的哈希（用于 influence 溯源），不必再跑一遍完整装配——
     # 两套装配并存过一段时间，固定事实就是从它们的缝里漏掉的。
     a_hash = render_a(seed)

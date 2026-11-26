@@ -31,11 +31,18 @@ STAY_BUCKETS = ((30, "刚坐下"), (120, "待了一会儿"), (300, "待了挺久
                 (720, "待了大半天"), (10 ** 9, "一直在这儿"))
 
 #: 哪些字段变了才值得追加一条。其余（温度 ±1、湿度）不追加。
-SUBSTANTIVE = ("place", "usual", "weather")
+SUBSTANTIVE = ("loc", "usual", "weather")
 
-#: 背景块前面那一行。**顺序说明是必须的**：不写，模型会把两行快照读成
-#: 并列的两个选项（"你最近是不是搬家了"），而不是先后。
-BRIEF_HEAD = "# 你此刻知道的（最后一行是现在；不用转述）"
+#: 没有别名的占位词。**不编名字**——从「夜里 90% 在这」推断出「这是家」是猜，
+#: 猜错了她会在你上班时问「到家了？」。给占位词，让模型自己决定要不要问。
+PLACEHOLDER = "ASK_TO_REPLACE"
+
+#: 只在新开上下文时出现一次的**拼接规则**。之后每轮只追加数据，不重复规则。
+RULES = (
+    "# 下面每轮末尾追加一行背景（JSON）。只信最后一行；"
+    "那是你知道的事，不是要复述的话。",
+    "# loc=ASK_TO_REPLACE 表示那个地方还没有名字——想知道就可以问。",
+)
 
 
 def _stay(minutes: float | None) -> str | None:
@@ -57,19 +64,14 @@ def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
 
     cur = places.current(db, actor=actor)
     if cur:
-        name = places.name_of(cur)
-        if name:
-            out["place"] = name
         since = int(cur.get("since") or 0)
         if since:
             out["stay"] = _stay((now - since) / 60_000.0)
 
-    city = ""
-    r = loc.fresh(db, now=now)
-    if r:
-        city = (r.get("city") or "").strip()
-    if city:
-        out["city"] = city
+    # **具体地点，不是城市。** 城市对聊天没有用——"你在温州"不构成任何话题；
+    # "你在公司"才有。没有别名就给占位词，让模型知道这件事可以问。
+    if cur:
+        out["loc"] = places.name_of(cur) or PLACEHOLDER
 
     w = amap.latest(db, now=now)
     if w and not amap._stale(w, now=now, ttl=amap.FRESH_MS):
@@ -96,7 +98,7 @@ def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
             best, best_n = p, hits
     if best is not None and best_n >= 3:
         name = places.name_of(best)
-        if name and name != out.get("place"):
+        if name and name != out.get("loc"):
             out["usual"] = name
 
     return out

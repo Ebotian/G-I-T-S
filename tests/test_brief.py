@@ -65,18 +65,19 @@ def test_只放可核对的事实(db) -> None:
     """概率（到达率、下一站）不许进上下文——它进了就会变成话术。"""
     _fill(db, name="公司")
     b = B.build(db, now=T0)
-    assert b["place"] == "公司"
-    assert b["city"] == "温州市"
+    assert b["loc"] == "公司"
     assert b["weather"] == "晴"
-    for bad in ("arrival", "next", "prob", "rate", "reachable"):
+    for bad in ("arrival", "next", "prob", "rate", "reachable", "city"):
         assert bad not in b, f"预测混进背景块了：{bad}"
 
 
-def test_没有名字就不编名字(db) -> None:
+def test_没有名字就给占位词(db) -> None:
+    """**不编名字。** 从「夜里 90% 在这」推断出「这是家」是猜；
+    猜错了她会在你上班时问「到家了？」。给占位词，让模型决定要不要问。"""
     _fill(db, name=None)
     b = B.build(db, now=T0)
-    assert "place" not in b
-    assert b["city"] == "温州市"
+    assert b["loc"] == B.PLACEHOLDER
+    assert "city" not in b, "城市对聊天没用"
 
 
 def test_停留是分桶不是分钟(db) -> None:
@@ -149,3 +150,27 @@ def test_工具目录是分类不是一个大接口(db) -> None:
         got = detail(db, t["name"], now=T0)
         assert isinstance(got, dict), t["name"]
     assert detail(db, "不存在的分类", now=T0) == {}
+
+
+# ── 拼接规则：只在新开上下文时出现一次 ──────────────────────
+
+
+def test_规则只在新开上下文出现一次(db) -> None:
+    from gits.world import brief_text
+
+    _fill(db, name="公司")
+    first = brief_text(db, now=T0, head=True)
+    later = brief_text(db, now=T0, head=False)
+    assert "只信最后一行" in first, "新开上下文应该带拼接规则"
+    assert "只信最后一行" not in later, "每轮都带规则就是白烧 token"
+    assert first.endswith(later), "规则应该在数据前面，不改变数据本身"
+
+
+def test_loc_是地点不是城市(db) -> None:
+    """城市对聊天没有用——"你在温州"不构成话题；"你在公司"才有。"""
+    from gits.world import brief_text
+
+    _fill(db, name="公司")
+    text = brief_text(db, now=T0)
+    assert '"loc":"公司"' in text
+    assert "温州市" not in text

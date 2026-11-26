@@ -18,14 +18,22 @@ from gits.core.db import DB
 __all__ = ["brief_text", "catalog", "detail"]
 
 
-def brief_text(db: DB, *, now: int, actor: str = "her") -> str:
-    """每轮追加的那一段：一行说明 + 一行 JSON。空 = 什么都不知道。"""
+def brief_text(db: DB, *, now: int, actor: str = "her",
+               head: bool = False) -> str:
+    """每轮追加的那一段：一行 JSON。空 = 什么都不知道。
+
+    head=True 时**额外带上拼接规则**——只在新开上下文时用一次。
+    之后每轮只追加数据，不重复规则：规则重复一遍就是白烧 tokens，
+    而且会让模型以为这是新一轮的指令。
+    """
     import gits.world.brief as _bm
 
     body = _bm.render(_bm.build(db, now=now, actor=actor))
     if not body:
         return ""
-    return _bm.BRIEF_HEAD + chr(10) + body
+    if head:
+        return chr(10).join(_bm.RULES) + chr(10) + body
+    return body
 
 
 def catalog() -> tuple[dict, ...]:
