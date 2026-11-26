@@ -15,7 +15,7 @@ from gits.io import shell as SH
 from gits.memory import extract as E
 from gits.memory.recall import reindex
 from gits.social import affect, state as slow
-from gits.speech import ctxwin
+from gits.speech import ctxwin, unresolved
 
 T0 = 1_800_000_000_000
 DAY = 86_400_000
@@ -160,3 +160,66 @@ def test_接话记下了是在回哪一句(db) -> None:
     row = db.one("SELECT ref_event_id FROM outcomes WHERE kind='reply'")
     assert row["ref_event_id"] == int(ev["id"]), \
         f"记的是 {row['ref_event_id']}，应该记那条消息的事件 id"
+
+
+# ── ⑥ 采样：不必有"可判定的理由"，但要有分布 ────────────────
+
+
+def _dangling(db: DB, name: str, times: int = 3, gap_days: int = 1) -> None:
+    from gits.core.project import entity_id
+    from gits.memory.graph import add_edge
+
+    for i in range(times):
+        ts = T0 + i * gap_days * DAY
+        nid = f"n:{name}-{i}"
+        eid = entity_id(name)
+        with Writer(db).txn() as c:
+            c.execute("INSERT INTO nodes(id, kind, born_ts, scope, s, r,"
+                      " last_touch) VALUES(?,?,?,?,?,?,?)",
+                      (nid, "episode", ts, "world", 1.0, 1.0, ts))
+            c.execute("INSERT INTO nodes(id, kind, born_ts, scope)"
+                      " VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING",
+                      (eid, "entity", ts, "world"))
+            c.execute("INSERT INTO node_content(node_id, content, created_ts)"
+                      " VALUES(?,?,?)", (eid, name, ts))
+            add_edge(c, src=nid, dst=eid, kind="mentions", ts=ts, w=1.0)
+
+
+def test_抽样在候选之间有分布(db) -> None:
+    """取 argmax 的话，永远只有同一件；抽样才能让别的事也有机会。"""
+    _dangling(db, "看病")
+    _dangling(db, "咖啡")
+    picks = {unresolved.sample(db, now=T0 + m * 60_000).entity
+             for m in range(40)}
+    assert len(picks) == 2, f"40 个不同的分钟只抽到 {len(picks)} 件"
+
+
+def test_同一分钟抽两次得到同一件(db) -> None:
+    """一次决策要可复现——日志和重放才能对得上。"""
+    _dangling(db, "看病")
+    _dangling(db, "咖啡")
+    a = unresolved.sample(db, now=T0)
+    b = unresolved.sample(db, now=T0 + 1_000)      # 同一分钟
+    assert a.entity == b.entity
+
+
+def test_没有候选时返回空(db) -> None:
+    assert unresolved.sample(db, now=T0) is None
+
+
+def test_共鸣绑在同一条候选上(db) -> None:
+    """以前共鸣是独立对人类最新消息算的，于是"最悬的是 A、最像的是 B"，
+    两个分数相加却没有此刻说 A 的依据。现在先抽一件，再看它像不像。"""
+    _dangling(db, "看病")
+    _dangling(db, "咖啡")
+    with Writer(db).txn() as c:
+        c.execute("INSERT INTO events(ts, recv_ts, source, kind, ext_id,"
+                  " payload, lag, ts_trust, scope)"
+                  " VALUES(?,?,?,?,?,?,?,?,?)",
+                  (T0, T0, "shell", "msg_in", "m1", "今天又喝了很多咖啡".encode(),
+                   0, 1, "world"))
+    i, _p, best = unresolved.inputs(db, now=T0)
+    assert best is not None
+    # 抽到咖啡时，共鸣才该是高的；抽到看病时不该被咖啡拉高
+    if unresolved.name_of(db, best.entity) == "咖啡":
+        assert i.resonance > 0, "抽到咖啡却没算出共鸣"

@@ -257,3 +257,24 @@ def test_inputs_和_picked_分开记(db, monkeypatch) -> None:
     obj = _j.loads(ev["payload"])
     assert obj["inputs"] == ["n:a", "n:b"], "纯候选"
     assert any("persona" in p for p in obj["picked"]), "picked 里有上一版"
+
+
+def test_历史人格快照不算新证据(db, monkeypatch) -> None:
+    """重放会把旧人格快照投影成候选；把它算进输入的话，
+    每写一版就多一份「支持自己」的证据，自我强化没有上限。
+    """
+    from gits.core import project as P
+
+    # 种子必须走事件（直接写 nodes 的话，重放会把它抹掉）
+    persona.seed(db, "他讨厌没有结论的会。", now=T0)
+    P.restore(db)                       # 种子要先投影成节点，才能进候选
+    _chat(monkeypatch, "第一版。")
+    assert persona.snapshot(db, now=T0) is not None
+    P.restore(db)                       # 夜里干的事
+
+    cands = persona.candidates(db, now=T0 + DAY)
+    kinds = {db.scalar("SELECT kind FROM nodes WHERE id=?", (c["id"],))
+             for c in cands}
+    assert "persona" not in kinds, f"快照混进了候选：{kinds}"
+    assert len(cands) == 1 and cands[0]["content"].startswith("他讨厌"), \
+        "候选只该有真实经历，不该有历史快照"

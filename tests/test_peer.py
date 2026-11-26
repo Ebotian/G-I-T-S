@@ -223,8 +223,10 @@ def test_漂移只漂非主个体(db, monkeypatch) -> None:
     attention.seed(db, "peer1", {"开会": 1.0})
     attention.seed(db, "peer2", {"开会": 1.0})
     g = G.Ghost(db=db)
-    assert g.drift(T0) == 1, "只有一对 peer"
-    assert attention.weights(db, "peer1")["开会"] != 1.0
+    assert g.drift(T0 + 86_400_000) == 1, "只有一对 peer"
+    # 没有趋同压力时，两人都朝自己的锚点回（1.0 就是锚点，所以不动）——
+    # 这正是要的行为：差异不该由调度器制造。
+    assert attention.weights(db, "peer1")["开会"] == pytest.approx(1.0, abs=0.02)
 
 
 def test_没有数据就不施压(db) -> None:

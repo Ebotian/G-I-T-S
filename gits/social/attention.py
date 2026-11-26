@@ -98,11 +98,17 @@ def step(db: DB, *, pair: tuple[str, str], pressure: float = 0.0,
             base_b = float(db.scalar(
                 "SELECT base_weight FROM attention WHERE actor_id=? AND topic=?",
                 (b, topic)))
-            # 反相：一个涨，另一个就跌。差异不靠运气。
-            da = base_a * rate
-            db_ = base_b * rate
-            new_a = _clamp(wa[topic] + da, base_a)
-            new_b = _clamp(wb[topic] - db_, base_b)
+            # **反相只在真的要分不开的时候用。**
+            # 以前的写法是每次都一涨一跌，于是两个实例哪怕因为共同经历
+            # 真心喜欢同一件事，也会被规则每天推开一点——差异是调度器制造的。
+            # 现在：pressure=0 时两人都朝自己的锚点回（不制造差异）；
+            #       pressure>0（措辞在趋同）时才反向推开。
+            if pressure > 0:
+                new_a = _clamp(wa[topic] + base_a * rate, base_a)
+                new_b = _clamp(wb[topic] - base_b * rate, base_b)
+            else:
+                new_a = _clamp(wa[topic] + (base_a - wa[topic]) * min(1.0, rate), base_a)
+                new_b = _clamp(wb[topic] + (base_b - wb[topic]) * min(1.0, rate), base_b)
             c.execute("UPDATE attention SET weight=?, updated_ts=?"
                       " WHERE actor_id=? AND topic=?", (new_a, now, a, topic))
             c.execute("UPDATE attention SET weight=?, updated_ts=?"

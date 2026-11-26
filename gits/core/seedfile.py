@@ -231,7 +231,8 @@ def projection_gap(db) -> int:
         " AND payload IS NOT NULL"
         " AND id NOT IN (SELECT event_id FROM redactions)") or 0
     nodes = db.scalar(
-        "SELECT count(*) FROM nodes WHERE kind='self' AND scope LIKE 'self:%'") or 0
+        "SELECT count(*) FROM nodes WHERE kind IN ('self','persona')"
+        " AND scope LIKE 'self:%'") or 0
     return max(0, int(events) - int(nodes))
 
 

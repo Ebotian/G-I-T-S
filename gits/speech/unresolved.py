@@ -109,11 +109,41 @@ def since_last_open(db: DB, *, now: int) -> int | None:
     return max(0, now - int(row["t"]))
 
 
-def _seed_text(db: DB, *, now: int) -> str:
-    """拿什么当"此刻的上下文"。最近一条收到的消息——那是共鸣的源头。"""
-    row = db.one("SELECT payload FROM events WHERE kind='msg_in'"
-                 " ORDER BY id DESC LIMIT 1")
-    return (row["payload"] or b"").decode("utf-8", "replace") if row else ""
+def name_of(db: DB, eid: str) -> str:
+    """实体的名字。"""
+    row = db.one("SELECT content FROM node_content WHERE node_id=?"
+                 " ORDER BY id DESC LIMIT 1", (eid,))
+    return str(row["content"]) if row else ""
+
+
+def sample(db: DB, *, now: int, actor: str = "her",
+           limit: int = 5) -> Dangling | None:
+    """从悬着的事里**抽一件**。
+
+    为什么是抽样而不是取最大：最大的那件未必是此刻该说的那件，
+    而"该说哪件"没有可判定的是非——它本来就是个选择。
+    抽样的意义是让这个选择**有分布**，而不是每次都被同一个 argmax 决定。
+
+    种子按（actor，分钟）固定：同一分钟内问两次得到同一件，
+    所以一次决策在重放和日志里是可复现的；下一分钟可以换一件。
+    """
+    import hashlib
+    import random
+
+    cands = scan(db, now=now, limit=limit)
+    if not cands:
+        return None
+    total = sum(max(0.0, c.value) for c in cands)
+    if total <= 0:
+        return cands[0]
+    seed = int(hashlib.sha256(f"{actor}:{now // 60_000}".encode())
+               .hexdigest()[:8], 16)
+    r = random.Random(seed).random() * total
+    for c in cands:
+        r -= max(0.0, c.value)
+        if r <= 0:
+            return c
+    return cands[-1]
 
 
 def inputs(db: DB, *, now: int, channel_online: bool = True, backlog_pressure: float = 0.0,
@@ -121,10 +151,7 @@ def inputs(db: DB, *, now: int, channel_online: bool = True, backlog_pressure: f
            tau_hours: float = TAU_HOURS,
            actor: str = "her") -> tuple[GateInputs, float, Dangling | None]:
     """把图里的东西折成 GateInputs + 压力 + 那件悬着的事。"""
-    best = None
-    cands = scan(db, now=now, limit=1)
-    if cands:
-        best = cands[0]
+    best = sample(db, now=now, actor=actor)
     elapsed = since_last_open(db, now=now)
     # 从没主动开口过：按"已经憋了很久"算，否则第一次永远发不出去
     p = 1.0 if elapsed is None else pressure(elapsed, tau_hours=tau_hours)
@@ -135,8 +162,14 @@ def inputs(db: DB, *, now: int, channel_online: bool = True, backlog_pressure: f
     from gits.social import state as slow
     from gits.social.drive import read as drive_read
 
-    hits = recall(db, _seed_text(db, now=now), actor=actor, now_ms=now, k=3)
-    resonance = max((h.sim for h in hits), default=0.0)
+    # **共鸣要绑在同一条候选上。**以前它是独立对人类最新消息算的，
+    # 于是"最悬的是看病、最像的是咖啡"，两个分数相加却没有此刻追问病情的依据。
+    # 现在：先抽一件悬着的事，再看刚才那句话和**这件事**有多像。
+    probe = name_of(db, best.entity) if best else ""
+    resonance = 0.0
+    if probe:
+        hits = recall(db, probe, actor=actor, now_ms=now, k=3)
+        resonance = max((h.sim for h in hits), default=0.0)
 
     return (GateInputs(
         channel_online=channel_online,

@@ -82,7 +82,8 @@ def candidates(db: DB, *, actor: str = "her", now: int) -> list[dict]:
     for r in db.q(
             "SELECT n.id, n.kind, n.s, n.last_touch, n.depth, c.content"
             " FROM nodes n JOIN node_content c ON c.node_id=n.id"
-            " WHERE n.scope=? AND c.absorbed_into IS NULL"
+            " WHERE n.scope=? AND n.kind != 'persona'"
+            " AND c.absorbed_into IS NULL"
             " AND c.superseded_by IS NULL"
             " AND c.id = (SELECT max(id) FROM node_content"
             "             WHERE node_id=n.id)", (self_of(actor),)):

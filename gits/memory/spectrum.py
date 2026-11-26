@@ -72,7 +72,10 @@ def allocate(db: DB, hits: list, *, slots: int = 5, arousal: float = 0.0,
     top_band = max(bands)
     weights: dict[int, float] = {}
     for b, rows in bands.items():
-        mass = sum(max(0.0, float(h.r)) for h in rows)
+        # **用相关性算频带权重，不是稳定期。**
+        # 用 r 的话，一批"被反复选中所以记得牢"的旧记忆会长期霸占名额，
+        # 而这是系统自己的偏好被当成证据。
+        mass = sum(max(0.0, float(h.score)) for h in rows)
         # ③ 频谱倾斜：激动抬**高频**（细节），平静抬**低频**（概括）。
         # 注意 level 的方向：0 带是最浅的（S<1 天），它才是高频。
         level = (1.0 - b / top_band * 2.0) if top_band > 0 else 1.0

@@ -143,3 +143,19 @@ def test_带内按相关性排_不是按稳定期(db) -> None:
             _hit("n:fresh", r=0.40, score=0.90)]
     got = allocate(db, hits, slots=2)
     assert [h.node_id for h in got] == ["n:fresh", "n:familiar"]
+
+
+def test_频带名额按相关性分_不是按稳定期(db) -> None:
+    """用 r 分名额的话，一批"被反复选中所以记得牢"的旧记忆会长期霸占，
+    而那是系统自己的选材偏好被当成了证据。
+    """
+    # 高频带：很多条、r 低但相关性高；低频带：r 高但相关性低
+    for i in range(4):
+        _node(db, f"n:f{i}", f"刚发生的事{i}", s=1.0)
+        _node(db, f"n:o{i}", f"很久以前的事{i}", s=64.0)
+    hits = ([_hit(f"n:f{i}", r=0.2, score=0.9) for i in range(4)]
+            + [_hit(f"n:o{i}", r=0.99, score=0.05) for i in range(4)])
+    got = [h.node_id for h in allocate(db, hits, slots=4, arousal=0.5,
+                                      tilt=0.0)]
+    fresh = sum(1 for i in got if i.startswith("n:f"))
+    assert fresh > 2, f"相关性高的频带只拿到 {fresh}/4 个名额"

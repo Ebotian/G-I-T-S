@@ -290,6 +290,7 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
         # 初始设定就是一条普通的自我域记忆——和后来的独白同一个投影路径。
         # **它就是第一版人格**：不需要模型，也不需要文件。
         nid = node_id_for(row["source"], row["ext_id"])
+        # 种子是**普通记忆**：会衰减、会被顶替、能进候选。
         conn.execute(
             "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
             " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
@@ -326,10 +327,13 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
         except json.JSONDecodeError:
             obj = {"narrative": response}
         nid = node_id_for(row["source"], row["ext_id"])
+        # **kind='persona'，不是 'self'。**
+        # 历史快照是连续性的来源，不是新证据；混进候选里的话，
+        # 每写一版就多一份"支持自己"的证据，自我强化没有上限。
         conn.execute(
             "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
             " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
-            (nid, "self", row["ts"], row["scope"], 1.0, 1.0, row["ts"]))
+            (nid, "persona", row["ts"], row["scope"], 1.0, 1.0, row["ts"]))
         conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
                      " VALUES(?,?,?)",
                      (nid, str(obj.get("narrative", "")).strip(), row["ts"]))
