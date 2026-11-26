@@ -114,6 +114,16 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _delivery_view(db) -> dict:
+    """"还欠谁一句话"的可比形式。**按稳定身份比，不按行号。**"""
+    from gits.speech.respond import pending
+
+    owed = sorted(f"{e['source']}:{e['ext_id']}" for e in pending(db, limit=200))
+    replied = int(db.scalar(
+        "SELECT count(*) FROM events WHERE kind='replied'") or 0)
+    return {"pending": owed, "replied": replied}
+
+
 def _replay_shadow(args: argparse.Namespace) -> int:
     """在**副本**上重放，对比线上投影。**不碰正在用的库。**
 
@@ -134,14 +144,26 @@ def _replay_shadow(args: argparse.Namespace) -> int:
         if p.exists():
             shutil.copy2(p, Path(str(shadow) + extra))
     try:
+        live = DB(src)
         sdb = DB(shadow)
-        live_nodes = DB(src).scalar("SELECT count(*) FROM nodes")
         n = restore(sdb)
-        shadow_nodes = sdb.scalar("SELECT count(*) FROM nodes")
+        # **比"接下来该发什么"，不是比节点数。** 两边节点数一样、
+        # 但对"还欠谁一句话"给出不同答案，才是会咬人的那种不一致。
+        live_view = _delivery_view(live)
+        shadow_view = _delivery_view(sdb)
         sdb.close()
-        same = live_nodes == shadow_nodes
-        print(f"影子重放 {n} 条事件：线上 {live_nodes} 节点，重建 {shadow_nodes} 节点"
-              f" → {'一致' if same else '**不一致**'}")
+        live.close()
+        same = live_view == shadow_view
+        print(f"影子重放 {n} 条事件：待回复 线上 {len(live_view['pending'])} / "
+              f"重建 {len(shadow_view['pending'])}，已回复 {live_view['replied']} / "
+              f"{shadow_view['replied']} → {'一致' if same else '**不一致**'}")
+        if not same:
+            only_live = sorted(set(live_view['pending']) - set(shadow_view['pending']))
+            only_shadow = sorted(set(shadow_view['pending']) - set(live_view['pending']))
+            if only_live:
+                print(f"  只在线上待回复：{only_live[:5]}")
+            if only_shadow:
+                print(f"  只在重建里待回复：{only_shadow[:5]}")
         return 0 if same else 2
     finally:
         for extra in ("", "-wal", "-shm"):
