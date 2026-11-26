@@ -226,29 +226,28 @@ def test_青春期一年十厘米在一周里合理(db) -> None:
 # ── 哪些事实会变、怎么变 ────────────────────────────────────
 
 
-def test_不会变的事实不许被周更改(db, monkeypatch) -> None:
-    """血型被"总结"成别的，不是生活变化，是错误。"""
+def test_周更只写可测量的那几个(db, monkeypatch) -> None:
+    """模型塞进来的野键（"blood_type"）没有白名单，不收。"""
     from gits.speech.llm import Reply
     from gits.ghost import Ghost
 
-    C.record(db, key="blood_type", value="A", now=T0)
+    C.record(db, key="weight_kg", value=52, now=T0)
     sunday = int(dt.datetime(2026, 11, 29, 21, 0).timestamp() * 1000)
     monkeypatch.setattr(
         "gits.speech.llm.chat",
         lambda *a, **k: Reply(text='{"blood_type": "B", "weight_kg": 52.2}',
                               model="stub", usage={}, latency_ms=1))
     changed = Ghost(db).character_weekly(sunday)
-    assert "blood_type" not in changed
-    assert C.current(db)["blood_type"] == "A"
-    assert "weight_kg" in changed
+    assert changed == "weight_kg", changed
+    assert "blood_type" not in C.current(db)
 
 
 def test_每种事实有自己的更新节奏() -> None:
     """不同状态不同时序——写在表里，不散在 if 里。"""
     assert C.CADENCE["height_cm"] == "weekly"
-    assert C.CADENCE["blood_type"] == "manual"
-    assert "height_cm" in C.WEEKLY_KEYS
-    assert "blood_type" not in C.WEEKLY_KEYS
+    assert C.CADENCE["birth_date"] == "manual"
+    assert "bust_cm" in C.WEEKLY_KEYS
+    assert "birth_date" not in C.WEEKLY_KEYS
     for key in C.ALLOWED:
         assert key in C.CADENCE, f"{key} 没有说明多久更新一次"
 
@@ -257,3 +256,54 @@ def test_年龄不存_所以不在节奏表里(db) -> None:
     assert "age" not in C.CADENCE and "age" not in C.ALLOWED
     C.record(db, key="birth_date", value="1999-11-30", now=T0)
     assert C.age(db, now=T0) == 26
+
+
+# ── 三围：可测量的女性身体结构 ──────────────────────────────
+
+
+def test_三围在允许的键里() -> None:
+    for k in ("bust_cm", "waist_cm", "hip_cm", "underbust_cm"):
+        assert k in C.ALLOWED, k
+        assert k in C.WEEKLY_KEYS, f"{k} 应该能周更"
+
+
+def test_三围有年龄相关的上限(db) -> None:
+    """青春期在发育，成年后只随体重浮动——同一个 2cm，含义不同。"""
+    C.record(db, key="birth_date", value="2013-01-01", now=T0)   # 13 岁
+    C.record(db, key="bust_cm", value=80.0, now=T0)
+    ok, why = C.bounded(db, key="bust_cm", value=81.0, now=T0)
+    assert ok is True, why
+    C.record(db, key="bust_cm", value=81.0, now=T0)
+    ok, why = C.bounded(db, key="bust_cm", value=84.0, now=T0)
+    assert ok is False, why
+
+
+def test_三围不是数字就拒(db) -> None:
+    C.record(db, key="waist_cm", value=62.0, now=T0)
+    ok, why = C.bounded(db, key="waist_cm", value="细", now=T0)
+    assert ok is False and "不是数字" in why
+
+
+def test_三围进头块(db) -> None:
+    C.record(db, key="bust_cm", value=86.0, now=T0)
+    C.record(db, key="waist_cm", value=62.0, now=T0)
+    C.record(db, key="hip_cm", value=90.0, now=T0)
+    got = C.line(db, now=T0)
+    assert '"bust_cm":86' in got and '"waist_cm":62' in got and '"hip_cm":90' in got
+
+
+def test_周更不许改生日(db, monkeypatch) -> None:
+    """生日是年龄的源。模型"总结"一下就能改，那年龄就不可信了。"""
+    from gits.speech.llm import Reply
+    from gits.ghost import Ghost
+
+    C.record(db, key="birth_date", value="1999-11-30", now=T0)
+    sunday = int(dt.datetime(2026, 11, 29, 21, 0).timestamp() * 1000)
+    monkeypatch.setattr(
+        "gits.speech.llm.chat",
+        lambda *a, **k: Reply(text='{"birth_date": "2001-01-01", "weight_kg": 52.2}',
+                              model="stub", usage={}, latency_ms=1))
+    changed = Ghost(db).character_weekly(sunday)
+    assert "birth_date" not in changed
+    assert C.current(db)["birth_date"] == "1999-11-30"
+    assert C.age(db, now=T0) == 26, "年龄跟着生日一起变了"

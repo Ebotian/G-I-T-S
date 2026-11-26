@@ -55,17 +55,30 @@ WEIGHT_KG_PER_YEAR: tuple[tuple[float, float, float], ...] = (
     (18, 999, 6.0),
 )
 
+#: 围度年变化上限（cm/年）。青春期在发育，成年后只随体重浮动。
+GIRTH_CM_PER_YEAR: tuple[tuple[float, float, float], ...] = (
+    (0, 10, 6.0),
+    (10, 18, 8.0),       # 青春期胸部/臀围的变化比身高更集中
+    (18, 25, 4.0),
+    (25, 999, 3.0),      # 成年后跟着体重走
+)
+
+#: 围度键。这些用同一张表判定。
+GIRTH_KEYS = frozenset({"bust_cm", "waist_cm", "hip_cm", "underbust_cm"})
+
 #: 没有年龄可依的键，用固定上限兜底。
-BOUNDS: dict[str, float] = {"shoe_size": 0.5}
+BOUNDS: dict[str, float] = {}
 
 #: **身高单调不减。** 青春期之后它只会持平，任何下降都是错。
 #: （真实的老年身高缩水不在这里处理——她不是老人，而多一条规则就多一个会静默失效的地方。）
 MONOTONIC = frozenset({"height_cm"})
 #: 这些键允许存在。名字固定，免得模型的自由发挥变成一堆散字段。
-ALLOWED = frozenset({"birth_date", "height_cm", "weight_kg", "gender",
-                     "eye_color", "hair_color", "shoe_size",
-                     "vision_left", "vision_right", "blood_type",
-                     "resting_hr", "waist_cm"})
+#:
+#: **只放可测量的。** 身高、体重、三围这类能用尺子和秤核对的。
+#: 血型、色觉、性别这些不是"每周会变的状态"，是一条不该被模型改写的记录——
+#: 放进周更里，模型"总结"一下就能改掉，那不是记录该有的样子。
+ALLOWED = frozenset({"birth_date", "height_cm", "weight_kg",
+                     "bust_cm", "waist_cm", "hip_cm", "underbust_cm"})
 
 #: **每个事实多久更新一次，怎么更新。**
 #:
@@ -79,15 +92,10 @@ CADENCE: dict[str, str] = {
     "birth_date": "manual",
     "height_cm": "weekly",
     "weight_kg": "weekly",
+    "bust_cm": "weekly",
     "waist_cm": "weekly",
-    "vision_left": "weekly",
-    "vision_right": "weekly",
-    "resting_hr": "weekly",
-    "gender": "manual",
-    "blood_type": "manual",
-    "eye_color": "manual",
-    "hair_color": "manual",
-    "shoe_size": "manual",
+    "hip_cm": "weekly",
+    "underbust_cm": "weekly",
 }
 
 #: 周更时允许模型动的键。**manual 的一律不许它改**——
@@ -171,7 +179,7 @@ def bounded(db: DB, *, key: str, value: Any, now: int) -> tuple[bool, str]:
     """
     old = current(db).get(key)
     new_n = _num(value)
-    if key in ("height_cm", "weight_kg") and new_n is None:
+    if (key in ("height_cm", "weight_kg") or key in GIRTH_KEYS)             and new_n is None:
         return (False, f"{key} 不是数字：{value!r}")
     if new_n is None:
         return (True, "非数值键")
@@ -188,6 +196,8 @@ def bounded(db: DB, *, key: str, value: Any, now: int) -> tuple[bool, str]:
         limit = _per_week(GROWTH_CM_PER_YEAR, a, default=0.5, floor=0.3)
     elif key == "weight_kg":
         limit = _per_week(WEIGHT_KG_PER_YEAR, a, default=2.0, floor=1.0)
+    elif key in GIRTH_KEYS:
+        limit = _per_week(GIRTH_CM_PER_YEAR, a, default=1.5, floor=1.0)
     else:
         limit = BOUNDS.get(key)
     if limit is None:
@@ -209,8 +219,8 @@ def line(db: DB, *, now: int) -> str:
     a = age(db, now=now)
     if a is not None:
         out["age"] = a
-    for k in ("height_cm", "weight_kg", "gender", "eye_color",
-              "hair_color", "shoe_size"):
+    for k in ("height_cm", "weight_kg", "bust_cm", "waist_cm",
+              "hip_cm", "underbust_cm"):
         if k in cur:
             n = _num(cur[k])
             out[k] = (int(n) if n is not None and n == int(n) else n) \
