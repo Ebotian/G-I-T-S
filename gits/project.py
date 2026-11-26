@@ -170,6 +170,26 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
     结果可能是 JSON（extract.py 的约定），也可能是纯文本（早期数据）。
     两种都得认——否则老事件重放时会被静默丢掉。
     """
+    if row["kind"] == "alias":
+        # 实体别名：查图时先把别名展开成同一族（semantic.family）。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            return
+        alias, canonical = obj.get("alias"), obj.get("canonical")
+        if not alias or not canonical or alias == canonical:
+            return
+        conn.execute("UPDATE entity_alias SET superseded_by=0"
+                     " WHERE alias_id=? AND superseded_by IS NULL", (alias,))
+        cur = conn.execute(
+            "INSERT INTO entity_alias(alias_id, canonical, source, certainty,"
+            " created_ts) VALUES(?,?,?,?,?)",
+            (alias, canonical, str(obj.get("source", "model")),
+             float(obj.get("certainty", 1.0)), row["ts"]))
+        conn.execute("UPDATE entity_alias SET superseded_by=?"
+                     " WHERE alias_id=? AND superseded_by=0",
+                     (int(cur.lastrowid), alias))
+        return
     if row["kind"] == "fact":
         # 固定事实：**不是记忆**，所以不进 nodes，也不该被衰减碰。
         # 改一条 = 再写一条同 (subject, key) 的，旧的标 superseded_by。
@@ -283,7 +303,8 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
     }
 
     sql = ("SELECT * FROM events WHERE kind IN"
-           " ('msg_in','inner','consolidate','persona','funnel','seed','fact')")
+           " ('msg_in','inner','consolidate','persona','funnel','seed','fact',"
+           "  'alias')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -303,7 +324,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
                         if row["kind"] in ("consolidate", "persona", "funnel",
-                                           "seed", "fact")
+                                           "seed", "fact", "alias")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(

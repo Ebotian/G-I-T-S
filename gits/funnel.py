@@ -46,13 +46,16 @@ PROMPT = """下面是同一件事在不同时候的若干条记录。把它们�
 
 {items}
 
-只输出 JSON：{"summary": "一两句话", "why": "凭什么这么概括（一句话）"}
+只输出 JSON：{"summary": "一两句话", "why": "凭什么这么概括（一句话）",
+ "same_as": [{"alias": "同一个东西的另一种叫法", "as": "上面列出的哪个叫法"}]}
 
 规则：
 - 写发生了什么、成了什么样的模式，不写感受，不写评价。
 - **必须保留至少一个具体指称**（人名、地方、东西、具体的事）。
 - 不要写"他很善良""她很和蔼"这种谁都套得上的话。
 - 越具体越好，但要比原件短。
+- same_as 只在**确实指同一个东西**时才写（「会议」和「开会」可以是，
+  「会议」和「咖啡馆」不是）。拿不准就留空数组。
 """
 
 
@@ -110,9 +113,16 @@ def cluster_of(db: DB, entity: str) -> Cluster:
     代价是"主题相似但没有共同实体"归不到一起；可以接受——
     真正会被反复提起的东西一定有名字。
     """
+    # **先把别名展开**：开会 / 会议 / 那个会 必须算一个簇，
+    # 否则复现次数被拆成三份，永远到不了阈值，漏斗就悄悄废了。
+    from gits.semantic import family
+
     eid = entity_id(entity)
+    fam = sorted(family(db, eid))
+    marks = ",".join("?" * len(fam))
     ids = [str(r["src"]) for r in db.q(
-        "SELECT src FROM edges WHERE dst=? AND kind='mentions'", (eid,))]
+        "SELECT DISTINCT src FROM edges WHERE kind='mentions'"
+        f" AND dst IN ({marks})", fam)]
     occ = _occurrences(db, ids)
     if not occ:
         return Cluster(entity=entity, node_ids=[], recurrence=0,
@@ -145,6 +155,31 @@ class Compacted:
     summary: str
     ratio: float          # 压缩比 = 子节点总字数 / 摘要字数
     cost: float
+
+
+def _record_aliases(db: DB, pairs, *, entity: str, now: int) -> int:
+    """把 same_as 写进别名表。**拿不准的不合**——空数组是常见答案。"""
+    from gits.project import entity_id
+    from gits.semantic import merge
+
+    if not isinstance(pairs, list):
+        return 0
+    canonical = entity_id(entity)
+    n = 0
+    for p in pairs:
+        if not isinstance(p, dict):
+            continue
+        alias_name = str(p.get("alias") or "").strip()
+        as_name = str(p.get("as") or "").strip()
+        if not alias_name or not as_name:
+            continue
+        try:
+            merge(db, entity_id(alias_name), entity_id(as_name),
+                  source="model", certainty=0.8, now=now)
+            n += 1
+        except ValueError:
+            continue                      # 成环就跳过，不猜
+    return n
 
 
 def _material(db: DB, node_ids: list[str], *, keep: int) -> tuple[list[str], list[str]]:
@@ -262,6 +297,10 @@ def compact(db: DB, entity: str, *, now: int | None = None,
 
             add_edge(c, src=nid, dst=entity_id(entity), kind="mentions",
                      ts=now, w=1.0)
+
+    # 顺带把别名记下来：这一步本来就在调模型，问一句几乎不加成本，
+    # 而且**有原件当依据**（不像共现推断只是统计上的相似）。
+    _record_aliases(db, obj.get("same_as"), entity=entity, now=now)
 
     return Compacted(entity=entity, node_id=nid, depth=depth,
                      children=len(press), summary=summary,

@@ -23,7 +23,7 @@ LOG_STREAMS = ("events", "model_calls", "observability", "redactions")
 
 #: 由日志集派生的表。任何时刻都可以整表删除并重建。
 PROJECTION_TABLES = ("nodes", "node_content", "edges", "outbox", "influence",
-                     "facts")
+                     "facts", "entity_alias")
 
 
 def now_ms() -> int:

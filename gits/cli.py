@@ -382,6 +382,13 @@ def build_parser() -> argparse.ArgumentParser:
     wp.add_argument("--actor", default="her")
     wp.set_defaults(fn=cmd_wipe)
 
+    al = sub.add_parser("aliases", help="语义别名：谁被当成同一个东西了")
+    al.add_argument("--inspect", action="store_true",
+                    help="打印实体名（默认只给 id——名字也是内容）")
+    al.add_argument("--merge", nargs=2, metavar=("别名", "归到"),
+                    help="手工合并两个实体（会写一条可重放的事件）")
+    al.set_defaults(fn=cmd_aliases)
+
     fn = sub.add_parser("funnel", help="漏斗：该压谁、压到多深")
     fn.add_argument("--run", type=int, default=0, help="真的压几个")
     fn.set_defaults(fn=cmd_funnel)
@@ -601,6 +608,42 @@ def cmd_persona(args: argparse.Namespace) -> int:
     print(f"\n现在能想起来 {len(cands)} 条自我域记忆：")
     for c in cands[:persona.SLOTS]:
         print(f"  r={c['r']:.2f} depth={c['depth']}  {c['content'][:40]}")
+    return 0
+
+
+def cmd_aliases(args: argparse.Namespace) -> int:
+    from gits import semantic
+    from gits.project import entity_id
+
+    db = DB(Path(args.db))
+    if args.merge:
+        alias, canonical = args.merge
+        ev = semantic.merge(db, entity_id(alias), entity_id(canonical),
+                            source="manual", now=now_ms())
+        print(f"合并了（事件 {ev}）。重放一遍让簇跟着变：gits --db {args.db} replay --restore")
+        return 0
+
+    names = {}
+    if args.inspect:
+        for r in db.q("SELECT c.node_id, c.content FROM node_content c"
+                      " JOIN nodes n ON n.id = c.node_id WHERE n.kind='entity'"):
+            names[str(r["node_id"])] = str(r["content"])
+
+    def show(eid: str) -> str:
+        return names.get(eid, eid) if args.inspect else eid
+
+    rows = db.q("SELECT * FROM entity_alias WHERE superseded_by IS NULL")
+    print(f"已合并 {len(rows)} 条：")
+    for r in rows:
+        print(f"  {show(str(r['alias_id']))} → {show(str(r['canonical']))}"
+              f"  （{r['source']}, 确信 {r['certainty']:.1f}）")
+
+    cands = semantic.propose(db)
+    print(f"\n共现推断的候选 {len(cands)} 条（**只是候选，没有合并**）：")
+    for a, b, score in cands:
+        print(f"  {show(a)} ~ {show(b)}  相似度 {score}")
+    if cands:
+        print("\n要合的话：gits aliases --merge <别名> <归到>，或者等夜里压缩时让模型看一眼")
     return 0
 
 
