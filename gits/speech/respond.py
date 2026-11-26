@@ -102,7 +102,11 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
     from gits.social.affect import line as affect_line
     from gits.speech.style import line as style_line
-    from gits.world import amap
+    from gits.world import amap, loc
+
+    # 外面这一行：他在哪（城市级）+ 那里的天气。空的部分不出现。
+    world = "\n".join(filter(None, (loc.line(db, now=now),
+                                    amap.line(db, now=now))))
 
     return RelationSnapshot(
         bucket=bucket(now),
@@ -110,7 +114,7 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now),
         style=style_line(db, actor, now=now),
         # 失手也不影响说话：读数读不到就是空，不抛。
-        world=amap.line(db, now=now))
+        world=world)
 
 
 def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:

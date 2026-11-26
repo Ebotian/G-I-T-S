@@ -224,6 +224,10 @@ class Ghost:
             key, adcode = amap.config()
         except RuntimeError:
             return ""                 # 没配就是没有，不是错误
+        # **天气跟着他走**：有位置就用他的城市，配置只是兜底。
+        from gits.world import loc
+
+        adcode = loc.adcode(self.db, now=t) or adcode
         got = amap.maybe(self.db, now=t, key=key, adcode=adcode)
         return (got or {}).get("weather", "") if got else ""
 

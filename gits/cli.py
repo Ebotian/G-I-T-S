@@ -138,6 +138,51 @@ def _replay_shadow(args: argparse.Namespace) -> int:
             Path(str(shadow) + extra).unlink(missing_ok=True)
 
 
+def cmd_loc(args: argparse.Namespace) -> int:
+    """手机上报一次位置。**我们接收，不追踪。**
+
+    手机端一行：
+        termux-location -p gps | ssh gits@ecs gits loc --stdin
+    坐标留本地，出上下文的是城市名。
+    """
+    import json
+    import sys
+    import time
+
+    from gits.core.db import DB
+    from gits.world import loc
+
+    raw: dict = {}
+    if args.stdin or args.lat is None:
+        try:
+            raw = json.loads(sys.stdin.read() or "{}")
+        except ValueError:
+            print("  stdin 不是合法 JSON")
+            return 2
+    lat = args.lat if args.lat is not None else raw.get("latitude")
+    lon = args.lon if args.lon is not None else raw.get("longitude")
+    if lat is None or lon is None:
+        print("  没有坐标")
+        return 2
+    acc = args.acc if args.acc is not None else raw.get("accuracy")
+    source = args.source or ("gps" if raw.get("provider") in (None, "gps") else raw["provider"])
+
+    now = int(time.time() * 1000)
+    db = DB(Path(args.db))
+    city = None
+    key = __import__("os").environ.get("GITS_AMAP_KEY")
+    if key:
+        city = loc.reverse(db, float(lat), float(lon), key=key)
+    _ev, created = loc.record(db, lat=float(lat), lon=float(lon),
+                              acc=float(acc) if acc is not None else None,
+                              source=source, now=now, city=city)
+    where = ", ".join(filter(None, [(city or {}).get("province"),
+                                    (city or {}).get("city"),
+                                    (city or {}).get("district")])) or "（拿不到城市）"
+    print(f"  {'收到' if created else '重复（已在账上）'}：{where}  精度 {acc or '?'} m  来源 {source}")
+    return 0
+
+
 def cmd_world(args: argparse.Namespace) -> int:
     """外面的世界：她此刻读到的天气。**读数落成事件，不是实时查询。**"""
     import time
@@ -486,6 +531,13 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("outbox_id", type=int)
     t.set_defaults(fn=cmd_trace)
 
+    lc = sub.add_parser("loc", help="手机上报一次位置（我们接收，不追踪）")
+    lc.add_argument("--lat", type=float)
+    lc.add_argument("--lon", type=float)
+    lc.add_argument("--acc", type=float)
+    lc.add_argument("--source", default=None)
+    lc.add_argument("--stdin", action="store_true", help="从 stdin 读 termux-location 的 JSON")
+    lc.set_defaults(fn=cmd_loc)
     wd = sub.add_parser("world", help="外面的世界：天气/位置（读数是事件）")
     wd.add_argument("--fetch", action="store_true", help="现在去取一次")
     wd.add_argument("--verify-location", action="store_true",
