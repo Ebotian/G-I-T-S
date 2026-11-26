@@ -499,6 +499,10 @@ class Ghost:
             turns = respond_pending(self.db, limit=1)
         except Exception as exc:                     # 模型挂了不能带走进程
             self.last_error = f"{type(exc).__name__}: {exc}"
+            # **这条路真的静默过一整天。**库缺 affect_state 的那段时间，
+            # 每一条消息都在这里抛出、被吞掉，她一个字都没回，
+            # 而 status 显示一切正常（outbox=0，fault=0）。
+            self.fault("reply", exc, now=now_ms() if t is None else t)
             return 0
         self.last_error = ""
         return len(turns)

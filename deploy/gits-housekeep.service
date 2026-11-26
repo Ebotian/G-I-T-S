@@ -13,7 +13,8 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
-ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her
+# 备份要写盘：目录归 her，且必须在这里放行（ProtectSystem 会挡住）。
+ReadWritePaths=/var/lib/gits/shared /var/lib/gits/her /var/backups/gits
 
 # **在影子库上校验，不动线上库。**重放会清空 outbox / influence 这些投影表，
 # 对正在用的库直接跑会丢掉尚未发出的回复（旧版还会让所有旧消息重新变成待回复，

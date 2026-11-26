@@ -110,6 +110,9 @@ install -m 0644 "$SRC/deploy/gits-shell.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-housekeep.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-ingress.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-housekeep.timer" /etc/systemd/system/
+# **备份目录要单独建。**默认放 /var/backups/gits，但那个目录不归 her 所有，
+# 而且 housekeep 的 ProtectSystem 会挡住写入——两处都得放行。
+install -d -o her -g gits -m 0750 /var/backups/gits
 systemctl daemon-reload
 
 # ── 7. 冒烟 + 自检 ───────────────────────────────────────

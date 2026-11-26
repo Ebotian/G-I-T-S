@@ -175,3 +175,20 @@ def test_抽取失败会留下证据(db, monkeypatch) -> None:
     faults = db.q("SELECT payload FROM events WHERE kind='fault'")
     assert faults, "抽取失败没有留下任何痕迹"
     assert any(b"extract" in bytes(f["payload"]) for f in faults)
+
+
+def test_回复失败会留下证据(db, monkeypatch) -> None:
+    """**这条路真的静默过一整天。**库缺 affect_state 的那段时间，
+    每条消息都在 Ghost.reply 里抛出、被吞进 last_error，
+    她一个字都没回，而 status 显示一切正常（outbox=0，fault=0）。"""
+    from gits.ghost import Ghost
+    from gits.speech import respond as R
+
+    def boom(*a, **k):
+        raise RuntimeError("no such table: affect_state")
+
+    monkeypatch.setattr(R, "respond_pending", boom)
+    Ghost(db).reply(T0)
+    faults = db.q("SELECT payload FROM events WHERE kind='fault'")
+    assert faults, "回复失败没有留下任何痕迹"
+    assert any(b"reply" in bytes(f["payload"]) for f in faults)
