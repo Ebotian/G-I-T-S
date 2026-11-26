@@ -77,3 +77,27 @@ def low_pass(prev: float, observed: float, tau_hours: float,
         return float(prev)
     k = 1.0 - math.exp(-dt_hours / max(1e-6, tau_hours))
     return float(prev) + (float(observed) - float(prev)) * k
+
+
+def slew(prev: float, rate: float, target: float, dt_hours: float, *,
+         max_rate: float, max_acc: float) -> tuple[float, float]:
+    """二阶限幅：**限速 + 限加速度，且不过冲**。
+
+    为什么需要二阶：只限速率的话，速率本身可以一步跳到最大，
+    于是曲线在起点最陡、后面平掉——看起来像「突然想要，然后慢慢泄气」。
+    限加速度之后它只能逐渐加速，形状才是连续的。
+
+    返回 (新值, 新速率)。
+    """
+    if dt_hours <= 0:
+        return float(prev), float(rate)
+    err = float(target) - float(prev)
+    want = max(-max_rate, min(max_rate, err / dt_hours))
+    lo, hi = rate - max_acc * dt_hours, rate + max_acc * dt_hours
+    new_rate = max(lo, min(hi, want))
+    new = prev + new_rate * dt_hours
+    # 不过冲：越过目标、或者正好落在目标上，都停在目标并让速度归零。
+    # （只判"越过"不够：正好命中时速度还留着，下一拍会继续推着走。）
+    if (target - new) * (target - prev) <= 0:
+        return float(target), 0.0
+    return new, new_rate

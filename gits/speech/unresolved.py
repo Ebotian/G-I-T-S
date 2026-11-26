@@ -134,6 +134,7 @@ def inputs(db: DB, *, now: int, phase_allows: bool = True,
     # 取最高相似度即可，不需要向量、不需要额外调用。
     from gits.memory.recall import recall
     from gits.social import state as slow
+    from gits.social.drive import read as drive_read
 
     hits = recall(db, _seed_text(db, now=now), actor=actor, now_ms=now, k=3)
     resonance = max((h.sim for h in hits), default=0.0)
@@ -144,4 +145,5 @@ def inputs(db: DB, *, now: int, phase_allows: bool = True,
         resolvable=best.resolvable if best else 0.0,
         backlog_pressure=backlog_pressure, reciprocity=reciprocity,
         consecutive=consecutive, resonance=resonance,
-        confidence=slow.read(db, actor, "confidence", now=now)), p, best)
+        confidence=slow.read(db, actor, "confidence", now=now),
+        drive=drive_read(db, actor, now=now)), p, best)

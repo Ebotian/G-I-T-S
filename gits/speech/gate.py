@@ -32,6 +32,8 @@ THRESHOLD = 0.15
 MAX_DROP = 0.6
 #: 共鸣最多把价值抬高多少（0.35 → 最多 ×1.35）
 RESONANCE_GAIN = 0.35
+#: 动量对价值的影响幅度（0.4 → 最多 ×1.4 / ×0.6）
+DRIVE_EFFECT = 0.4
 
 #: 互惠系数估不出来时的兜底（中性，不鼓励也不抑制）
 RECIPROCITY_FALLBACK = 0.5
@@ -83,6 +85,7 @@ class GateInputs:
     consecutive: int = 0                 # 连续开口次数
     resonance: float = 0.0               # 共鸣：他刚说的话和哪段旧记忆有多像
     confidence: float | None = None       # 底气：慢变量，None → 不参与
+    drive: float | None = None            # 动量：正反馈，有界+限速+限加速度
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,10 @@ def open_value(i: GateInputs) -> float:
     # 0.5 是中性（不奖不罚），所以 None 时等于 1.0。
     if i.confidence is not None:
         v *= 0.5 + max(0.0, min(1.0, i.confidence))
+    # 动量：**正反馈**。说得密就更想开口，说得稀就更难开口。
+    # 它自己带上界和限速（social/drive.py），所以这里不再夹一次。
+    if i.drive is not None:
+        v *= 1.0 + DRIVE_EFFECT * (max(0.0, min(1.0, i.drive)) - 0.5) * 2.0
     return min(1.0, v)
 
 

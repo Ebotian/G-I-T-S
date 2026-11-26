@@ -199,6 +199,10 @@ class Ghost:
             drifted = self.drift(t)
             if drifted:
                 did["drift"] = drifted
+            # 正反馈的驱动量往前推一格。**只有这里写**，gate 只读。
+            from gits.social.drive import update as drive_update
+
+            drive_update(self.db, "her", now=t)
         return did
 
     def night(self, t: int | None = None) -> str:
