@@ -80,3 +80,4 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/autonomy.md`](docs/research/autonomy.md) — 她不在你面前时用什么额度做什么：三等分、日清、形式自由、内容不可见
 - [`docs/research/convergent.md`](docs/research/convergent.md) — 共同被独立实现的机制：八条不变式、各自破过的地方、怎么防止被改回去
 - [`docs/research/amap.md`](docs/research/amap.md) — 外面的世界：读数是第三类东西（不是事件、不是记录）、位置是配置不是 IP 猜的
+- [`docs/research/space.md`](docs/research/space.md) — 空间源：手机在 CGNAT 后面所以只能手机推、四个只有真装才暴露的坑、坐标换标签才出门
