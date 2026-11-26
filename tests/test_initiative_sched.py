@@ -105,3 +105,54 @@ def test_额度花光了就不开口(db) -> None:
     got = I.check(db, now=MON)
     assert got["allow"] is False
     assert "额度" in got["why"]
+
+
+def test_数据太薄时不装作知道(db) -> None:
+    """一天数据的小时先验是阶跃：19 点说过话，3 点就成了"他从不来"。
+    那是没数据，不是不在——退回中性，不要凭空造作息。"""
+    from gits.core.db import Writer
+
+    # 只有一天、只有一个小时有过消息
+    base = MON + 5 * DAY + 19 * HOUR
+    Writer(db).append_event(source="wx", kind="msg_in", ext_id="only",
+                            ts=base, recv_ts=base, scope="world",
+                            payload=b"hi")
+    night = MON + 6 * DAY + 3 * HOUR
+    day = MON + 6 * DAY + 14 * HOUR
+    n_ts, n_why = I.next_check(db, now=night, pressure_now=0.3)
+    d_ts, d_why = I.next_check(db, now=day, pressure_now=0.3)
+    assert n_ts - night == d_ts - day, f"薄数据下夜里和白天不该差这么多：{n_why} / {d_why}"
+    # 中性先验给的是小时量级；若拿那一天的 0/1 阶跃当作息，会直接顶到 4 小时上限
+    assert n_ts - night < I.MAX_GAP_MS, n_why
+    assert "回来" not in n_why, f"薄数据下不该找回来时刻：{n_why}"
+
+
+def test_数据够了才按作息排(db) -> None:
+    """同样的钟点，数据够了之后夜里明显更稀。"""
+    from gits.core.db import Writer
+
+    base = MON + 5 * DAY + 19 * HOUR
+    Writer(db).append_event(source="wx", kind="msg_in", ext_id="only",
+                            ts=base, recv_ts=base, scope="world",
+                            payload=b"hi")
+    thin_night = MON + 6 * DAY + 3 * HOUR
+    before, _ = I.next_check(db, now=thin_night, pressure_now=0.3)
+
+    _week_of_chats(db)                      # 补到 7 天
+    fat_night = MON + 14 * DAY + 3 * HOUR
+    after, why = I.next_check(db, now=fat_night, pressure_now=0.3)
+    assert after - fat_night > 2 * HOUR, why
+
+
+def test_薄数据下也不猜他几点回来(db) -> None:
+    """这一天的"作息"就是一个点。拿它去预测"他 19 点回来"是编的。"""
+    from gits.core.db import Writer
+
+    base = MON + 5 * DAY + 19 * HOUR
+    Writer(db).append_event(source="wx", kind="msg_in", ext_id="only",
+                            ts=base, recv_ts=base, scope="world",
+                            payload=b"hi")
+    now = MON + 6 * DAY + 17 * HOUR + 30 * 60_000
+    ts, why = I.next_check(db, now=now, pressure_now=0.0)
+    assert "回来" not in why, f"薄数据下猜了他回来的时刻：{why}"
+    assert ts - now <= I.MAX_GAP_MS

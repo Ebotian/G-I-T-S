@@ -220,6 +220,10 @@ PRESENCE_FLOOR = 0.02
 #: 不是节拍——真正的节拍由时序模型给。
 MIN_GAP_MS = 10 * 60_000
 MAX_GAP_MS = 4 * 3_600_000
+#: 数据要够这么多天才敢按作息排期。**一天数据的小时先验是阶跃，不是作息。**
+MIN_DAYS = 3
+#: 数据太薄时的中性在场率。"不知道"不等于"不在"。
+DEFAULT_PRESENCE = 0.5
 #: "他回来了"的判据：比现在高这么多倍，或者绝对值够高
 SURGE_RATIO = 2.0
 SURGE_ABS = 0.30
@@ -246,7 +250,12 @@ def next_check(db: DB, *, now: int, actor: str = "her",
 
     p = pressure(db, now=now, actor=actor) if pressure_now is None         else float(pressure_now)
     snap = activity.snapshot(db, now=now)
-    here = max(PRESENCE_FLOOR, activity.at(db, now, now=now, snap=snap))
+    # **数据太少的时候不要装作知道。** 只有一天数据时，小时先验是 0/1 的阶跃：
+    # 他在 19 点说过话，那 3 点就成了"他从不在"——而那是没数据，不是不在。
+    # 和 gate 里"互惠系数估不出来就用兜底值"是同一条：估不准就退回中性。
+    thin = snap.days < MIN_DAYS
+    here = DEFAULT_PRESENCE if thin else max(
+        PRESENCE_FLOOR, activity.at(db, now, now=now, snap=snap))
 
     # 压力满了也不能"每 10 分钟看一眼"——他睡着的时候，看多少次都一样。
     # 所以留一个最小台阶：它让间隔永远跟着在场概率走，而不是跟着压力塌成 0。
@@ -255,6 +264,11 @@ def next_check(db: DB, *, now: int, actor: str = "her",
     gap = int(min(MAX_GAP_MS, max(MIN_GAP_MS, need_online / here * 3_600_000)))
 
     # 在 gap 里找"他回来了"的那一小时。找到了就提前到它开头。
+    #
+    # **这里本来有个"数据太薄就不找"的分支，已经删了。** 算一下就知道它从不生效：
+    # 薄数据时 here=0.5 → 门槛 = max(0.3, 1.0) = 1.0，而 days<3 时
+    # 任何一格的估计上界是 (1+20·p)/(1+20) < 1（同一个星期几要求相隔 7 天，
+    # 那时 days 已经 ≥3 了）。**门槛自己就把噪声挡在外面了，不需要第二道闸。**
     surge = max(SURGE_ABS, here * SURGE_RATIO)
     hour = 3_600_000
     start = ((now // hour) + 1) * hour
