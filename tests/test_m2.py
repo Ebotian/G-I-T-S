@@ -45,10 +45,14 @@ def test_积压重时不撩人() -> None:
     assert open_value(_good(backlog_pressure=0.9)) < open_value(_good(backlog_pressure=0.1))
 
 
-def test_承诺线优先级最高() -> None:
-    r = evaluate(_good(promise_violated=True, unexcluded=1.0, resolvable=1.0))
-    assert not r.allow
-    assert "承诺线" in r.reason
+def test_不再有时段规则() -> None:
+    """承诺线删掉了：行为不该由墙钟直接决定。
+
+    「凌晨不该说话」现在靠可解释度——那个时段线索早凉了（unresolved.py）。
+    """
+    assert not hasattr(_good(), "promise_violated")
+    r = evaluate(_good(unexcluded=1.0, resolvable=1.0))
+    assert r.allow, "没有任何时钟规则能单独拦下她"
 
 
 def test_没有出口就不开口() -> None:
@@ -65,8 +69,7 @@ def test_互惠系数缺失时用兜底且标注() -> None:
 def test_每个决策都带理由() -> None:
     cases = [
         _good(), _good(unexcluded=0.0), _good(phase_allows=False),
-        _good(promise_violated=True), _good(backlog_pressure=1.0),
-        _good(unexcluded=0.01, resolvable=0.01),
+        _good(backlog_pressure=1.0), _good(unexcluded=0.01, resolvable=0.01),
     ]
     for c in cases:
         assert evaluate(c).reason

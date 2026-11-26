@@ -1,4 +1,9 @@
-"""开口决策：一个价值函数 + 一条承诺线。
+"""开口决策：一个价值函数 + 一个随时间累积的压力。
+
+**没有任何一条规则读时钟。** 早先有一道「承诺线」（某个时段答应过不打扰），
+已经删掉：那是用墙钟直接决定行为，和我们自己的规矩冲突。
+「凌晨三点不该说话」这件事应该**从节律里学出来**——那个时段她本来就不指望
+有回应，可解释度自然低——而不是由一条规则册封。
 
 DESIGN §5.3 / §14.5。分两段：
 
@@ -23,6 +28,8 @@ SEND_DECAY = 0.85
 
 #: 低于这个价值就不值得打扰
 THRESHOLD = 0.15
+#: 压力最多把门槛压低多少（1.0 = 压到 0，那等于没有门槛）
+MAX_DROP = 0.6
 
 #: 互惠系数估不出来时的兜底（中性，不鼓励也不抑制）
 RECIPROCITY_FALLBACK = 0.5
@@ -66,7 +73,6 @@ def elicitation_ratio(
 class GateInputs:
     phase_allows: bool = True
     channel_online: bool = True
-    promise_violated: bool = False       # 声明式承诺线（§14.6），不是节律
 
     unexcluded: float = 0.0              # 未解释度：当前刺激与已知的偏差
     resolvable: float = 0.0              # 可解释度：问一句能拿到多少答案
@@ -93,10 +99,19 @@ def open_value(i: GateInputs) -> float:
     )
 
 
-def evaluate(i: GateInputs) -> GateResult:
-    """顺序有意义：承诺线 > 状态 > 通道 > 价值。"""
-    if i.promise_violated:
-        return GateResult(False, 0.0, "承诺线：这个时段我答应过不打扰")
+def threshold_for(pressure: float) -> float:
+    """憋得越久，越愿意说一句价值不高的话。
+
+    没有这一项的话主动行为会**饿死**：所有因子长期偏低时她永远不开口，
+    而且不报错——和 edges.w 那种"写了没人读"一样，是静默失效。
+
+    压力只降门槛，不抬价值：价值本身仍然由证据决定。
+    """
+    return THRESHOLD * (1.0 - MAX_DROP * max(0.0, min(1.0, pressure)))
+
+
+def evaluate(i: GateInputs, *, pressure: float = 0.0) -> GateResult:
+    """顺序有意义：状态 > 通道 > 证据 > 价值。"""
     if not i.phase_allows:
         return GateResult(False, 0.0, "状态不允许开口（DREAMING/DORMANT）")
     if not i.channel_online:
@@ -110,9 +125,12 @@ def evaluate(i: GateInputs) -> GateResult:
 
     v = open_value(i)
     tag = "（互惠系数不可用，用兜底）" if i.reciprocity is None else ""
-    if v < THRESHOLD:
-        return GateResult(False, v, f"价值 {v:.3f} 低于阈值 {THRESHOLD}{tag}")
-    return GateResult(True, v, f"价值 {v:.3f} 超过阈值{tag}")
+    need = threshold_for(pressure)
+    if v < need:
+        return GateResult(False, v,
+                          f"价值 {v:.3f} 低于阈值 {need:.3f}（憋了 {pressure:.0%}）{tag}")
+    return GateResult(True, v,
+                      f"价值 {v:.3f} 超过阈值 {need:.3f}（憋了 {pressure:.0%}）{tag}")
 
 
 def should_swallow(i: GateInputs) -> bool:
