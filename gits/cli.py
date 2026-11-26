@@ -259,7 +259,7 @@ def cmd_character(args: argparse.Namespace) -> int:
         if args.value is None:
             print("  要给一个值")
             return 2
-        ok, why = C.bounded(db, key=args.key, value=args.value)
+        ok, why = C.bounded(db, key=args.key, value=args.value, now=now)
         if not ok:
             print(f"  拒收：{why}")
             return 2

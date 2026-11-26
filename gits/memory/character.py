@@ -28,12 +28,39 @@ from typing import Any, Callable
 
 from gits.core.db import DB, Writer
 
-#: 数值型事实的单次变化上限。**超了就拒收，不是夹住**——
-#: 夹住会让一个荒唐的数字变成"稍微有点荒唐"，而拒收保留了旧值。
-BOUNDS: dict[str, float] = {
-    "height_cm": 0.6,       # 一周长高超过 0.6cm 不是成长，是笔误
-    "weight_kg": 1.5,       # 一周体重浮动超过 1.5kg 不是生活，是笔误
-}
+#: 身高年增长速度的上限，按年龄分段（cm/年）。
+#:
+#: 来源（都是临床口径，不是我自己拍的）：
+#:   生后第一年 25cm；第二年 10-12cm；2 岁到青春期前 5-7cm/年；
+#:   青春期突增平均 10cm/年（持续 1-2 年）；骨骺闭合后停止增长。
+#:   见北京儿童医院《青春期前及青春期生长规律》、ScienceDirect 儿科生长速度章节。
+#:
+#: **这是上限，不是目标**——它拦的是"模型说这周长高了 8 厘米"，
+#: 不是规定她该长多快。
+GROWTH_CM_PER_YEAR: tuple[tuple[float, float, float], ...] = (
+    (0, 1, 25.0),
+    (1, 2, 11.0),
+    (2, 10, 7.0),
+    (10, 18, 10.0),      # 覆盖青春期突增
+    (18, 25, 1.0),
+    (25, 999, 0.2),      # 成年后基本不长，留一点测量误差
+)
+
+#: 体重年变化上限（kg/年）。成人给得宽——衣服、水分、肌肉都能变，
+#: 这里拦的同样是笔误，不是生活方式。
+WEIGHT_KG_PER_YEAR: tuple[tuple[float, float, float], ...] = (
+    (0, 1, 6.0),
+    (1, 3, 2.5),
+    (3, 18, 3.5),
+    (18, 999, 6.0),
+)
+
+#: 没有年龄可依的键，用固定上限兜底。
+BOUNDS: dict[str, float] = {"shoe_size": 0.5}
+
+#: **身高单调不减。** 青春期之后它只会持平，任何下降都是错。
+#: （真实的老年身高缩水不在这里处理——她不是老人，而多一条规则就多一个会静默失效的地方。）
+MONOTONIC = frozenset({"height_cm"})
 #: 这些键允许存在。名字固定，免得模型的自由发挥变成一堆散字段。
 ALLOWED = frozenset({"birth_date", "height_cm", "weight_kg", "gender",
                      "eye_color", "hair_color", "shoe_size"})
@@ -92,22 +119,55 @@ def record(db: DB, *, key: str, value: Any, src: str = "seed",
     return ev
 
 
-def bounded(db: DB, *, key: str, value: Any) -> tuple[bool, str]:
-    """机械判定：这个变化可以接受吗。**返回理由，不只是布尔。**"""
+def _per_week(table: tuple[tuple[float, float, float], ...],
+               age: float | None, *, default: float, floor: float) -> float:
+    """按年龄取年速度，换成一周的上限。
+
+    `floor` 是绝对下限：成年后按年速度折算出来只有 0.006，
+    但测量误差、站姿、早晚差异都在这量级——**拦的是笔误，不是生理极限。**
+    """
+    if age is None:
+        return default                # 不知道年龄：宽一点，别把正常变化也拦了
+    for lo, hi, per_year in table:
+        if lo <= age < hi:
+            return max(per_year / 52.0 * 1.5, floor)
+    return default
+
+
+def bounded(db: DB, *, key: str, value: Any, now: int) -> tuple[bool, str]:
+    """机械判定：这个变化可以接受吗。**返回理由，不只是布尔。**
+
+    上限按**年龄**取：一岁和二十五岁，一周能变多少完全不是一回事。
+    身高额外要求**单调不减**。
+    """
     old = current(db).get(key)
-    limit = BOUNDS.get(key)
-    if limit is None:
-        return (True, "无上限的键")
     new_n = _num(value)
-    if new_n is None:
+    if key in ("height_cm", "weight_kg") and new_n is None:
         return (False, f"{key} 不是数字：{value!r}")
+    if new_n is None:
+        return (True, "非数值键")
     old_n = _num(old)
     if old_n is None:
         return (True, "还没有旧值，先收下")
-    delta = abs(new_n - old_n)
-    if delta > limit:
-        return (False, f"{key} 变化 {delta:.2f} 超过上限 {limit}")
-    return (True, f"{key} 变化 {delta:.2f}，在上限内")
+
+    delta = new_n - old_n
+    if key in MONOTONIC and delta < 0:
+        return (False, f"{key} 只能不降，这次是 {delta:+.2f}")
+
+    a = age(db, now=now)
+    if key == "height_cm":
+        limit = _per_week(GROWTH_CM_PER_YEAR, a, default=0.5, floor=0.3)
+    elif key == "weight_kg":
+        limit = _per_week(WEIGHT_KG_PER_YEAR, a, default=2.0, floor=1.0)
+    else:
+        limit = BOUNDS.get(key)
+    if limit is None:
+        return (True, "无上限的键")
+    if abs(delta) > limit:
+        return (False, f"{key} 变化 {delta:+.2f} 超过上限 {limit:.2f}"
+                f"（{('年龄 %.0f 岁' % a) if a is not None else '没有生日'}）")
+    where = f"（{'年龄 %.0f 岁' % a if a is not None else '没有生日'}）"
+    return (True, f"{key} 变化 {delta:+.2f}，在上限 {limit:.2f} 内{where}")
 
 
 def line(db: DB, *, now: int) -> str:

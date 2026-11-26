@@ -298,7 +298,7 @@ class Ghost:
         for key, value in got.items():
             if key not in C.ALLOWED:
                 continue
-            ok, why = C.bounded(self.db, key=key, value=value)
+            ok, why = C.bounded(self.db, key=key, value=value, now=t)
             if not ok:
                 self.fault("character:" + str(key), ValueError(why), now=t)
                 continue

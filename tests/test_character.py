@@ -49,14 +49,14 @@ def test_未知的键收不下(db) -> None:
 def test_越界的变化被拒(db) -> None:
     """模型说"这周长高了 8 厘米"——**代码不认**，保留旧值。"""
     C.record(db, key="height_cm", value=168, now=T0)
-    ok, why = C.bounded(db, key="height_cm", value=176)
+    ok, why = C.bounded(db, key="height_cm", value=176, now=T0)
     assert ok is False, why
     assert "上限" in why
 
 
 def test_合理的变化收下(db) -> None:
     C.record(db, key="weight_kg", value=52, now=T0)
-    ok, why = C.bounded(db, key="weight_kg", value=52.4)
+    ok, why = C.bounded(db, key="weight_kg", value=52.4, now=T0)
     assert ok is True, why
     C.record(db, key="weight_kg", value=52.4, now=T0 + DAY)
     assert C.current(db)["weight_kg"] == "52.4"
@@ -64,7 +64,7 @@ def test_合理的变化收下(db) -> None:
 
 def test_不是数字就拒(db) -> None:
     C.record(db, key="height_cm", value=168, now=T0)
-    ok, why = C.bounded(db, key="height_cm", value="挺高的")
+    ok, why = C.bounded(db, key="height_cm", value="挺高的", now=T0)
     assert ok is False and "不是数字" in why
 
 
@@ -168,3 +168,56 @@ def test_模型没话说就什么都不写(db, monkeypatch) -> None:
         "gits.speech.llm.chat",
         lambda *a, **k: Reply(text="{}", model="stub", usage={}, latency_ms=1))
     assert Ghost(db).character_weekly(sunday) == ""
+
+
+# ── 边界按年龄：一岁和二十五岁不是一回事 ────────────────────
+
+
+def _at(db: DB, *, birth: str, now_value: float) -> None:
+    C.record(db, key="birth_date", value=birth, now=T0)
+    C.record(db, key="height_cm", value=now_value, now=T0)
+
+
+def test_一岁孩子一周长半厘米是正常的(db) -> None:
+    """婴儿期一年 25cm，一周半厘米很正常。"""
+    _at(db, birth="2025-11-26", now_value=75.0)      # 1 岁
+    ok, why = C.bounded(db, key="height_cm", value=75.2, now=T0)
+    assert ok is True, why
+
+
+def test_成年人一周长半厘米就拒(db) -> None:
+    """二十五岁一周长 0.6cm 不是成长，是笔误。"""
+    _at(db, birth="2001-01-01", now_value=170.0)     # 25 岁
+    ok, why = C.bounded(db, key="height_cm", value=170.6, now=T0)
+    assert ok is False, why
+    assert "上限" in why
+
+
+def test_身高只能不降(db) -> None:
+    """**身高单调不减。** 任何下降都是错，多少都拒。"""
+    _at(db, birth="2001-01-01", now_value=170.0)
+    ok, why = C.bounded(db, key="height_cm", value=169.9, now=T0)
+    assert ok is False
+    assert "只能不降" in why
+
+
+def test_体重可以上下(db) -> None:
+    """体重没有单调性，掉了也正常。"""
+    C.record(db, key="weight_kg", value=60.0, now=T0)
+    ok, why = C.bounded(db, key="weight_kg", value=59.4, now=T0)
+    assert ok is True, why
+
+
+def test_没有生日就宽一点不是拒(db) -> None:
+    """不知道年龄时不该一律拒收——那会让还没填生日的新实例永远更新不了。"""
+    C.record(db, key="height_cm", value=170.0, now=T0)
+    ok, why = C.bounded(db, key="height_cm", value=170.3, now=T0)
+    assert ok is True, why
+
+
+def test_青春期一年十厘米在一周里合理(db) -> None:
+    """青春期突增一年 10cm，折到一周约 0.3cm；给的理由要能看出来是按年龄算的。"""
+    _at(db, birth="2013-01-01", now_value=155.0)     # 13 岁
+    ok, why = C.bounded(db, key="height_cm", value=155.2, now=T0)
+    assert ok is True, why
+    assert "13 岁" in why, why
