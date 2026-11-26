@@ -354,14 +354,17 @@ def cmd_world(args: argparse.Namespace) -> int:
 
 def cmd_quota(args: argparse.Namespace) -> int:
     """额度账户。像电子账户一样，规则全部可见。"""
-    from gits.io.quota import Account, Budget, allowance
-    b = Budget(monthly_cny=args.monthly)
-    a = allowance(b, args.actor)
-    cap = a.cny * 5
-    acct = Account(actor=args.actor, balance=args.balance)
-    print(acct.statement(a.cny, accrue_cap_days=5))
-    print(f"\n  给她看的一行：{acct.hint(a.cny)}")
-    (Path(args.db).parent).mkdir(parents=True, exist_ok=True)
+    from gits.io import ledger
+    from gits.io.quota import bar
+
+    db = DB(args.db)
+    now = int(time.time() * 1000)
+    print(ledger.statement(db, actor=args.actor, now=now))
+    st = ledger.state(db, actor=args.actor, now=now)
+    cap = st["day_cap"]
+    pct = 0.0 if cap <= 0 else min(1.0, st["spent_today"] / cap)
+    print(f"\n  给她看的一行：额度{bar(pct, 8)} {st['spendable']:.1f}/{cap:.1f}元")
+    db.close()
     return 0
 
 

@@ -152,3 +152,23 @@ def test_没发出去就不记反刍(db, monkeypatch) -> None:
               now=T0, model="stub")
     assert db.scalar("SELECT strikes FROM rumination WHERE entity=?",
                      (eid,)) is None
+
+
+def test_主动开口从她的额度里扣(db, monkeypatch) -> None:
+    """这是她想去说，不是他先开口——钱从她自己的 allowance 出。"""
+    from gits.io import ledger
+
+    monkeypatch.setattr(
+        "gits.speech.llm.chat",
+        lambda *a, **k: Reply(text="在吗？", model="stub",
+                              usage={"prompt_tokens": 900,
+                                     "completion_tokens": 100},
+                              latency_ms=1))
+    before = ledger.state(db, actor="her", now=T0)["spent_today"]
+    opening.compose(db, initiative_event=1, candidate=None,
+                    channel="weixin", to={"to": "u1"},
+                    model="stub", now=T0)
+    after = ledger.state(db, actor="her", now=T0)["spent_today"]
+    assert after > before, "主动开口没记账"
+    raw = db.q("SELECT payload FROM events WHERE kind='spend'")
+    assert any(b"opening" in bytes(r["payload"]) for r in raw)

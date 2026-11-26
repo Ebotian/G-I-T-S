@@ -240,6 +240,13 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
                   hit_tokens=int(reply.usage.get("prompt_cache_hit_tokens") or 0),
                   event_id=event["id"])
 
+    # **记账。**回复照记，但**不拦**——"配额不该表现为她坏了"（DESIGN §18.6）。
+    # 拦只拦主动开口：那是她自己的开销，说完没人理也照样花。
+    from gits.io import ledger as _ledger
+
+    _ledger.charge_usage(db, actor=actor, usage=reply.usage, now=now,
+                         what="reply", ref=f"reply:{event['id']}")
+
     call_id = Writer(db).append_model_call(
         kind="reply", model=reply.model, response=reply.text,
         event_id=event["id"], usage_json=str(reply.usage),

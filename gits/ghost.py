@@ -105,9 +105,11 @@ class Ghost:
     #: 窗口决策。慢一点没关系——它只在积压时才有活干。
     ctx_ms: int = 60_000
     _last_ctx: int = 0
-    #: 主动开口的判定间隔。判定很便宜（几次查询），不用太密。
-    initiative_ms: int = 20 * 60_000
-    _last_initiative: int = 0
+    #: **主动开口没有固定节拍。**下一次什么时候看一眼，由时序模型给
+    #: （initiative.next_check）：他在的概率高就勤看，他睡了就看得很稀。
+    #: 固定 20 分钟的问题不是快慢，是它不看他在不在——凌晨三点照样每 20 分钟
+    #: 判一次，而那时判多少次结果都一样。
+    _next_initiative: int = 0
     #: 外面的世界（天气/位置）。**读数是事件**，装配只读日志，
     #: 所以这里只是采集，不是决策。取不到就跳过，不加时延。
     world_ms: int = 30 * 60_000
@@ -199,7 +201,7 @@ class Ghost:
             got = self.window(t)
             if got:
                 did["ctx"] = got
-        if t - self._last_initiative >= self.initiative_ms:
+        if t >= self._next_initiative:
             got = self.initiative(t)
             if got:
                 did["initiative"] = got
@@ -232,7 +234,15 @@ class Ghost:
         from gits.speech import initiative as I
 
         t = now_ms() if t is None else t
-        self._last_initiative = t
+        # **先排下一次。**不管这一次成没成，下一次什么时候看由时序模型给——
+        # 失败之后固定等 20 分钟重来，正是"有代码但没生效"那类毛病：
+        # 判定很便宜，可它一旦放行，每次都要调一次模型。
+        try:
+            nxt, why_next = I.next_check(self.db, now=t)
+        except Exception as exc:
+            self.fault("initiative_sched", exc, now=t)
+            nxt, why_next = t + 60 * 60_000, "排期失败，退到一小时"
+        self._next_initiative = max(t + 60_000, nxt)
         try:
             got = I.check(self.db, now=t)
         except Exception as exc:

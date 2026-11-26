@@ -92,6 +92,12 @@ def compose(db: DB, *, initiative_event: int, candidate: str | None,
              .entity_id(candidate),)) or 0)
         unresolved.record_use(db, _entity_of(candidate), known=known, now=now)
 
+    # **钱。**主动开口从她自己的额度里扣——这是她想去说，不是他先开口。
+    from gits.io import ledger
+
+    ledger.charge_usage(db, actor=actor, usage=reply.usage, now=now,
+                        what="opening", ref=f"opening:{initiative_event}")
+
     # 记账挂在 initiative 事件上——这一轮的 token 是这次决定的成本。
     Writer(db).append_model_call(
         kind="opening", model=reply.model, event_id=initiative_event,

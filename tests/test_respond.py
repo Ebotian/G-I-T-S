@@ -101,3 +101,31 @@ def test_没有模型密钥时错误要能读懂(db, monkeypatch) -> None:
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     with pytest.raises(LLMError, match="DEEPSEEK_API_KEY"):
         chat([{"role": "user", "content": "hi"}])
+
+
+def test_回复也从她的额度里记账(db, stub) -> None:
+    """回复照记，但**不拦**——配额不该表现为她坏了。
+    只记不拦这件事得有测试盯着：漏了记账，日上限就永远不会生效。"""
+    from gits.io import ledger
+
+    _persona(db)
+    ev = _msg(db, "在吗")
+    before = ledger.state(db, actor="her", now=T0)["spent_today"]
+    R.respond(db, R.pending(db)[0], model="stub", now=T0)
+    after = ledger.state(db, actor="her", now=T0)["spent_today"]
+    assert after > before, "回复没有记账"
+    raw = db.q("SELECT payload FROM events WHERE kind='spend'")
+    assert any(b"reply" in bytes(r["payload"]) for r in raw)
+
+
+def test_额度花光了也照样回复(db, stub) -> None:
+    """**拦只拦主动开口。**他先说话了，她就得回。"""
+    from gits.io import ledger
+
+    _persona(db)
+    s = ledger.state(db, actor="her", now=T0)
+    ledger.charge(db, actor="her", kind="llm", cost=s["day_cap"], now=T0)
+    assert ledger.state(db, actor="her", now=T0)["spendable"] == 0
+    ev = _msg(db, "在吗")
+    out = R.respond(db, R.pending(db)[0], model="stub", now=T0)
+    assert out is not None and out.outbox_id

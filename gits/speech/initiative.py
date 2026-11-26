@@ -48,6 +48,10 @@ REPLY_HORIZON_HOURS = 1.0
 #: 多久没回算"没回"
 REPLY_WINDOW_MS = 6 * 3_600_000
 
+#: 一次主动开口的大致价钱（元）。**不是为了精确，是为了在做决定之前问一次。**
+#: 实际花费按 API 返回的 usage 记，这个数只用在"花不花得起"的预检上。
+ESTIMATE_OPENING = 0.005
+
 
 def spoken(db: DB, *, actor: str = "her") -> list[int]:
     """**真的说出去过**的时间戳，最近的在前。压力靠它算。
@@ -208,13 +212,76 @@ def assemble(db: DB, *, now: int, actor: str, cand: Any,
         resonance=resonance, unanswered=penalty)
 
 
+#: 每次检查推进多少压力台阶。**它决定"多久看一眼"，不是"多久说一句"。**
+CHECK_STEP = 0.15
+#: 在线概率的下限。夜里纯 0 会让间隔无穷大，钳一下。
+PRESENCE_FLOOR = 0.02
+#: 检查间隔的上下限。**这是唯一的两个常数**，而且它们是夹取边界，
+#: 不是节拍——真正的节拍由时序模型给。
+MIN_GAP_MS = 10 * 60_000
+MAX_GAP_MS = 4 * 3_600_000
+#: "他回来了"的判据：比现在高这么多倍，或者绝对值够高
+SURGE_RATIO = 2.0
+SURGE_ABS = 0.30
+
+
+def next_check(db: DB, *, now: int, actor: str = "her",
+               pressure_now: float | None = None) -> tuple[int, str]:
+    """下一次该在什么时候看一眼。**间隔由时序模型给，不是常数。**
+
+    检查频率应当跟着"他大概在不在"走：
+
+        他在（正写着消息）  几分钟看一眼，机会就在眼前
+        他睡了（0.02）      几小时看一次——看多少次，结果都一样
+
+    再叠一层压力：刚说完话（压力低）本来没什么可急的，间隔拉长；
+    憋满了（压力 1.0）随时可能开口，间隔压到最短。
+
+        gap = (1 − 压力) · IDLE_HOURS_FULL · CHECK_STEP / max(在场概率, 下限)
+
+    最后在 gap 里找"他回来的那一刻"，把检查挪到那一小时的开头——
+    现在就睡但一个小时后起床，没必要干等四小时。
+    """
+    from gits.time import activity
+
+    p = pressure(db, now=now, actor=actor) if pressure_now is None         else float(pressure_now)
+    snap = activity.snapshot(db, now=now)
+    here = max(PRESENCE_FLOOR, activity.at(db, now, now=now, snap=snap))
+
+    # 压力满了也不能"每 10 分钟看一眼"——他睡着的时候，看多少次都一样。
+    # 所以留一个最小台阶：它让间隔永远跟着在场概率走，而不是跟着压力塌成 0。
+    need_online = max(CHECK_STEP * 0.1,
+                      (1.0 - min(1.0, p)) * IDLE_HOURS_FULL * CHECK_STEP)
+    gap = int(min(MAX_GAP_MS, max(MIN_GAP_MS, need_online / here * 3_600_000)))
+
+    # 在 gap 里找"他回来了"的那一小时。找到了就提前到它开头。
+    surge = max(SURGE_ABS, here * SURGE_RATIO)
+    hour = 3_600_000
+    start = ((now // hour) + 1) * hour
+    for ts in range(start, now + gap, hour):
+        if activity.at(db, ts, now=now, snap=snap) >= surge:
+            return (max(now + MIN_GAP_MS, ts),
+                    f"他大概 {(ts - now) // 60_000} 分钟后回来"
+                    f"（在场 {here:.2f} → "
+                    f"{activity.at(db, ts, now=now, snap=snap):.2f}）")
+    return (now + gap,
+            f"{gap / 60_000:.0f} 分钟后再看（在场 {here:.2f} · 压力 {p:.2f}）")
+
+
 def check(db: DB, *, now: int, actor: str = "her",
           channel_online: bool = True) -> dict[str, Any]:
     """该不该主动开口。**返回理由，不只是布尔。**"""
+    from gits.io import ledger
     from gits.speech import gate
     from gits.speech.unresolved import record_use, sample
 
     p = pressure(db, now=now, actor=actor)
+    # **先问钱。**这一步在她自己的额度里扣（不是他的对话预算），
+    # 花光了就不开口——不是"坏了"，是今天花完了。降级，不报错。
+    ok_money, why_money = ledger.can_spend(db, cost=ESTIMATE_OPENING,
+                                           actor=actor, now=now)
+    if not ok_money:
+        return {"allow": False, "why": why_money, "pressure": round(p, 3)}
     cand = sample(db, now=now, actor=actor)
     if cand is None:
         return {"allow": False, "why": "没有悬着的事", "pressure": round(p, 3)}
