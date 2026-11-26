@@ -237,10 +237,37 @@ class Ghost:
             return ""
         if not got.get("allow"):
             return ""
-        # 走到这里才算数：落一条 initiative 事件（记的是决定，不是内容）。
-        I.record(self.db, now=t, reason=str(got.get("why") or ""),
-                 candidate=got.get("candidate"))
-        return str(got.get("why") or "allow")
+        # **决定 → 入队。** 这一步以前是断的：只落一条 initiative 事件就返回，
+        # 库里有"决定"、没有"待发消息"，而 spoken() 又把它计为说过。
+        ev = I.record(self.db, now=t, reason=str(got.get("why") or ""),
+                      candidate=got.get("candidate"))
+        if ev is None:
+            return ""
+        try:
+            from gits.speech import opening
+
+            to = self._contact()
+            if to is None:
+                # 通道不认识收件人：决定留在日志里，压力照旧攒着。
+                return ""
+            out = opening.compose(self.db, initiative_event=ev,
+                                  candidate=got.get("candidate"),
+                                  channel=str(to.get("channel") or "weixin"),
+                                  to=to.get("meta"), now=t)
+        except Exception as exc:
+            self.fault("opening", exc, now=t)
+            return ""
+        return "" if out is None else str(got.get("why") or "allow")
+
+    def _contact(self) -> dict | None:
+        """主动开口发给谁。**没有联系人就不发**，不猜。"""
+        row = self.db.one("SELECT * FROM contacts ORDER BY last_ts DESC LIMIT 1")
+        if row is None:
+            return None
+        keys = row.keys()
+        token = row["context_token"] if "context_token" in keys else None
+        return {"channel": row["channel"] if "channel" in keys else "weixin",
+                "meta": {"to": row["actor_id"], "context_token": token}}
 
     def fault(self, where: str, exc: BaseException, *, now: int) -> None:
         """**静默失败要显示。**

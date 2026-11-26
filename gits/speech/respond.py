@@ -144,6 +144,36 @@ def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:
         " ORDER BY e.id LIMIT ?", (*vis, limit))]
 
 
+def _prepare(db: DB, *, now: int, actor: str, stimulus: str,
+             history: list, persona: PersonaSeed | None = None):
+    """装配一轮。**回复和主动开口共用这一条**——
+    两套装配并存过，固定事实就是从它们的缝里漏掉的。"""
+    seed = persona or load_persona(db)
+    snap = relation(db, now=now, actor=actor)
+    wide = recall(db, stimulus, actor=actor,
+                  context=" ".join(t for _w, t in history),
+                  now_ms=now, k=SLOTS * 3)
+    from gits.memory.spectrum import allocate
+    from gits.social.affect import distribution as affect_dist
+
+    mood = affect_dist(db, actor, now=now)
+    hits = allocate(db, wide, slots=SLOTS, arousal=mood["arousal"])
+    from gits.speech.facts import lines as fact_lines
+    from gits.world import forecast as fc
+
+    due = tuple(fact_lines(db, now)) + tuple(fc.lines(db, now))
+    from gits.world import brief_text
+
+    fresh_window = not history
+    ctx = TurnContext(stimulus=stimulus, recent=tuple(history), recalled=lines(hits),
+                      due=due,
+                      background=brief_text(db, now=now, actor=actor,
+                                            head=fresh_window))
+    a_hash = render_a(seed)
+    body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
+    return seed, snap, ctx, a_hash, body, hits
+
+
 def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
             model: str = "deepseek-flash", max_tokens: int = 200,
             actor: str = "her", now: int | None = None) -> Turn:
@@ -156,38 +186,9 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     history = recent(db, actor=actor,
                      from_id=win["first_event_id"] if win else None,
                      until_id=event["id"])
-    seed = persona or load_persona(db)
-    snap = relation(db, now=now, actor=actor)
-    # 先宽召回，再按频谱分配——直接把 k 当条数会让同一个频带被填满。
-    wide = recall(db, text, actor=actor,
-                  context=" ".join(t for _w, t in history),
-                  now_ms=now, k=SLOTS * 3)
-    from gits.memory.spectrum import allocate
-    from gits.social.affect import distribution as affect_dist
-
-    mood = affect_dist(db, actor, now=now)
-    hits = allocate(db, wide, slots=SLOTS, arousal=mood["arousal"])
-    from gits.speech.facts import lines as fact_lines
-    from gits.world import forecast as fc
-
-    # C 段的日子：生日这类记录 + 窗口内的预报。**两类都是记录，不是读数。**
-    due = tuple(fact_lines(db, now)) + tuple(fc.lines(db, now))
-    # 背景**每轮追加**在易变区开头。装配不知道它从哪来——
-    # 它只认 gits.world.brief_text() 这一个入口。
-    from gits.world import brief_text
-
-    # **拼接规则只在新开上下文时出现一次**：之后每轮只追加数据，不重复规则。
-    # 重复一遍就是白烧 token，还会让模型以为这是新一轮的指令。
-    fresh_window = not history
-    ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
-                      due=due,
-                      background=brief_text(db, now=now, actor=actor,
-                                            head=fresh_window))
-    # 只要 A 段的哈希（用于 influence 溯源），不必再跑一遍完整装配——
-    # 两套装配并存过一段时间，固定事实就是从它们的缝里漏掉的。
-    a_hash = render_a(seed)
-    # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
-    body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
+    seed, snap, ctx, a_hash, body, hits = _prepare(
+        db, now=now, actor=actor, stimulus=text, history=history,
+        persona=persona)
 
     # **工具按节奏放行。** 高频对话里多一个来回就是"卡住了"——
     # pacing 判间隔分布，主动开口永远允许。目录为空时整条路径不生效。

@@ -212,7 +212,7 @@ def check(db: DB, *, now: int, actor: str = "her",
           channel_online: bool = True) -> dict[str, Any]:
     """该不该主动开口。**返回理由，不只是布尔。**"""
     from gits.speech import gate
-    from gits.speech.unresolved import sample
+    from gits.speech.unresolved import record_use, sample
 
     p = pressure(db, now=now, actor=actor)
     cand = sample(db, now=now, actor=actor)
