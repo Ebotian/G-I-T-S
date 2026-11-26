@@ -35,12 +35,18 @@ PLACE_SOURCES = frozenset({"gps", "wifi", "network"})
 def record(db: DB, *, lat: float, lon: float, acc: float | None = None,
            source: str = "gps", fix_ts: int | None = None,
            now: int | None = None, city: dict[str, Any] | None = None,
+           elapsed_ms: int | None = None, cached: bool | None = None,
            scope: str = "self:her") -> tuple[int, bool]:
     """落成事件。幂等键是**手机给的定位时间**，不是我们收到的时间。
 
     同一份定位重复上报 = 同一条事件；手机重发不会造成多条轨迹。
     """
     ts = int(fix_ts or now or time.time() * 1000)
+    # **termux-location 0.60 不返回定位时间**（只有 elapsedMs），
+    # 所以上报的必须由手机自己盖章：phone_ts = 生成这条上报的那一刻。
+    # 否则时间戳等于服务器的收件时间，手机离线三小时补报也会显得"刚刚"。
+    if cached is None:
+        cached = elapsed_ms is not None and int(elapsed_ms) < 50
     payload = {
         "kind": "loc",
         "lat": round(float(lat), 6),
@@ -48,6 +54,11 @@ def record(db: DB, *, lat: float, lon: float, acc: float | None = None,
         "acc": float(acc) if acc is not None else None,
         "source": source,
         "fix_ts": ts,
+        #: 手机自己盖的时间戳（没有就是 None，那时 fix_ts 退回收件时间）
+        "phone_ts": int(fix_ts) if fix_ts is not None else None,
+        #: 取这一次定位花了多久。5 ms 基本等于"返回的是缓存"。
+        "elapsed_ms": int(elapsed_ms) if elapsed_ms is not None else None,
+        "cached": bool(cached),
     }
     if city:
         payload.update({k: city[k] for k in ("province", "city", "district",

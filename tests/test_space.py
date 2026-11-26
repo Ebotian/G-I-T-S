@@ -112,3 +112,56 @@ def test_场所层只收够精度的来源(db) -> None:
     """ip 定位几十公里误差，会把家和公司合并成一个点。"""
     assert "ip" not in loc.PLACE_SOURCES
     assert {"gps", "wifi"} <= loc.PLACE_SOURCES
+
+
+# ── 时间戳必须由手机自己盖 ──────────────────────────────────
+
+
+def test_手机盖的时间戳优先于收件时间(db) -> None:
+    """termux-location 0.60 不返回定位时间，所以手机端自己塞一个 phone_ts。
+
+    否则时间戳只是收件时间——手机离线三小时补报也会显得"刚刚"。
+    """
+    phone_ts = T0 - 3 * HOUR
+    _ev, created = loc.record(db, lat=27.8, lon=120.8, source="gps",
+                              fix_ts=phone_ts, now=T0)
+    assert created
+    row = db.one("SELECT ts, recv_ts, lag FROM events WHERE source='phone'")
+    assert int(row["ts"]) == phone_ts, "定位时间被收件时间顶替了"
+    assert int(row["recv_ts"]) == T0
+    assert int(row["lag"]) == 3 * HOUR, "传输延迟没记下来"
+
+
+def test_补报的旧定位不会显得刚刚(db) -> None:
+    """按 fix_ts 判新鲜度，不按收件时间。"""
+    loc.record(db, lat=27.8, lon=120.8, source="gps", fix_ts=T0 - 5 * HOUR,
+               now=T0, city={"city": "温州市"})
+    assert loc.fresh(db, now=T0) is None, "三小时前的定位被当成此刻"
+    assert loc.line(db, now=T0) == ""
+
+
+def test_重发同一条定位不产生新事件(db) -> None:
+    kw = dict(lat=27.8, lon=120.8, source="gps", fix_ts=T0)
+    a, _ = loc.record(db, now=T0, **kw)
+    b, created = loc.record(db, now=T0 + 600_000, **kw)
+    assert (b, created) == (a, False), "手机重发同一条定位，账上多了一条"
+
+
+def test_五毫秒返回的是缓存(db) -> None:
+    """elapsedMs 很小 = termux-location 返回的是最后已知位置。"""
+    _ev, _ = loc.record(db, lat=27.8, lon=120.8, source="network",
+                        fix_ts=T0, now=T0, elapsed_ms=5)
+    import json
+
+    p = json.loads(db.scalar("SELECT payload FROM events WHERE source='phone'").decode())
+    assert p["cached"] is True
+    assert p["elapsed_ms"] == 5
+
+
+def test_真的取一次就不是缓存(db) -> None:
+    import json
+
+    loc.record(db, lat=27.8, lon=120.8, source="gps", fix_ts=T0, now=T0,
+               elapsed_ms=1800)
+    p = json.loads(db.scalar("SELECT payload FROM events WHERE source='phone'").decode())
+    assert p["cached"] is False

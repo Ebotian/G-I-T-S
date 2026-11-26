@@ -168,18 +168,29 @@ def cmd_loc(args: argparse.Namespace) -> int:
     source = args.source or ("gps" if raw.get("provider") in (None, "gps") else raw["provider"])
 
     now = int(time.time() * 1000)
+    # 手机自己盖的章优先。termux-location 0.60 不返回定位时间，
+    # 所以手机端要额外塞一个 phone_ts，否则时间戳只是收件时间。
+    phone_ts = raw.get("phone_ts")
+    fix_ts = int(phone_ts) if phone_ts else None
+    elapsed = raw.get("elapsedMs")
+    if elapsed is None:
+        elapsed = raw.get("elapsed_ms")
     db = DB(Path(args.db))
+    _cached = bool(raw.get("cached")) or (elapsed is not None and int(elapsed) < 50)
     city = None
     key = __import__("os").environ.get("GITS_AMAP_KEY")
     if key:
         city = loc.reverse(db, float(lat), float(lon), key=key)
     _ev, created = loc.record(db, lat=float(lat), lon=float(lon),
                               acc=float(acc) if acc is not None else None,
-                              source=source, now=now, city=city)
+                              source=source, fix_ts=fix_ts, now=now, city=city,
+                              elapsed_ms=int(elapsed) if elapsed is not None else None)
     where = ", ".join(filter(None, [(city or {}).get("province"),
                                     (city or {}).get("city"),
                                     (city or {}).get("district")])) or "（拿不到城市）"
-    print(f"  {'收到' if created else '重复（已在账上）'}：{where}  精度 {acc or '?'} m  来源 {source}")
+    lag = (now - fix_ts) // 1000 if fix_ts else 0
+    print(f"  {'收到' if created else '重复（已在账上）'}：{where}  精度 {acc or '?'} m  "
+          f"来源 {source}  传输 {lag}s" + ("  （缓存定位）" if _cached else ""))
     return 0
 
 
