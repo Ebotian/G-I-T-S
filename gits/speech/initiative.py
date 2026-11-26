@@ -135,24 +135,20 @@ def unanswered(db: DB, *, now: int, actor: str = "her",
     return (factor, weight)
 
 
-def _seed(actor: str, now: int) -> int:
-    h = hashlib.sha256(f"{actor}:{now // 60_000}".encode()).hexdigest()
-    return int(h[:8], 16)
-
-
-def sample_value(mean: float, *, actor: str, now: int, n: float = 8.0) -> float:
+def sample_value(mean: float, *, actor: str = "her", now: int = 0,
+                 n: float = 8.0) -> float:
     """把"价值大致是这个数"变成一个具体的数。**只在决策时用一次。**
 
     用 Beta(mean*k, (1-mean)*k) 抽样：k 是不确定度，观测少就抖得厉害。
-    种子按（actor，分钟）固定——同一分钟内问两次，答案一样（可复现）。
+
+    **不固定种子。** 决定会落成事件，重放读的是当时记下的结果，不是重抽一次；
+    固定种子只会让随机数可预测，换不来可复现。要保证的是"一次判定只抽一次"。
     """
     import random
 
     mean = max(0.001, min(0.999, float(mean)))
     k = max(1.0, float(n))
-    a, b = mean * k, (1.0 - mean) * k
-    rnd = random.Random(_seed(actor, now))
-    return rnd.betavariate(a, b)
+    return random.betavariate(mean * k, (1.0 - mean) * k)
 
 
 def assemble(db: DB, *, now: int, actor: str, cand: Any,
@@ -196,8 +192,9 @@ def check(db: DB, *, now: int, actor: str = "her",
     inputs = assemble(db, now=now, actor=actor, cand=cand,
                       channel_online=channel_online)
     base = gate.evaluate(inputs, pressure=p)
-    # **采样只在这一步**：之前全是分布，这里是唯一一次取值。
-    drawn = sample_value(base.value, actor=actor, now=now)
+    # **一次判定只抽一次。** 之前全是分布，这里是唯一一次取值；
+    # 抽完就落事件，重放读的是那个结果，不会再抽一次。
+    drawn = sample_value(base.value)
     ok = bool(base.allow) and drawn >= gate.threshold_for(p)
     penalty, weight = unanswered(db, now=now, actor=actor)
     return {"allow": ok,

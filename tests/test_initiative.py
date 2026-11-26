@@ -112,13 +112,13 @@ def test_允许重发但惩罚累积(db) -> None:
     assert three > 0, "罚到零就永远不说了——那是饿死"
 
 
-def test_同一分钟内采样结果相同(db) -> None:
-    """只在决策时采样一次，而且种子固定：日志和重放对得上。"""
-    a = I.sample_value(0.4, actor="her", now=T0)
-    b = I.sample_value(0.4, actor="her", now=T0 + 30_000)
-    c = I.sample_value(0.4, actor="her", now=T0 + 90_000)
-    assert a == b, "同一分钟内两次采样不一致"
-    assert a != c, "跨分钟应该换一次抽样"
+def test_采样不固定种子_但围绕期望值(db) -> None:
+    """**不固定种子。** 决定会落成事件，重放读的是记下的结果，不是重抽一次。
+    要保证的只有：抽出来的数围绕期望值，而且真的在抽。"""
+    xs = [I.sample_value(0.4) for _ in range(300)]
+    mean = sum(xs) / len(xs)
+    assert 0.3 < mean < 0.5, mean
+    assert len({round(x, 4) for x in xs}) > 200, "采样退化成常数了"
 
 
 def test_决策用的是采样值不是期望值(db) -> None:

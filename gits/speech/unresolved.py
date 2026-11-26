@@ -126,10 +126,12 @@ def sample(db: DB, *, now: int, actor: str = "her",
     而"该说哪件"没有可判定的是非——它本来就是个选择。
     抽样的意义是让这个选择**有分布**，而不是每次都被同一个 argmax 决定。
 
-    种子按（actor，分钟）固定：同一分钟内问两次得到同一件，
-    所以一次决策在重放和日志里是可复现的；下一分钟可以换一件。
+    **不固定种子。** 一开始我按（actor，分钟）固定它，理由是"同一分钟内问两次
+    要得到同一件"。那个理由站不住：决定本身会落成事件，重放不重做决定——
+    它读的是当时记下的结果。固定种子只是让随机数变得可预测，没有换来任何东西。
+
+    真正要保证的是：**一次判定只抽一次**。这一条由调用方（check）保证。
     """
-    import hashlib
     import random
 
     cands = scan(db, now=now, limit=limit)
@@ -138,9 +140,7 @@ def sample(db: DB, *, now: int, actor: str = "her",
     total = sum(max(0.0, c.value) for c in cands)
     if total <= 0:
         return cands[0]
-    seed = int(hashlib.sha256(f"{actor}:{now // 60_000}".encode())
-               .hexdigest()[:8], 16)
-    r = random.Random(seed).random() * total
+    r = random.random() * total
     for c in cands:
         r -= max(0.0, c.value)
         if r <= 0:

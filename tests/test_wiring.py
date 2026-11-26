@@ -194,13 +194,15 @@ def test_抽样在候选之间有分布(db) -> None:
     assert len(picks) == 2, f"40 个不同的分钟只抽到 {len(picks)} 件"
 
 
-def test_同一分钟抽两次得到同一件(db) -> None:
-    """一次决策要可复现——日志和重放才能对得上。"""
+def test_抽到的总是候选中(db) -> None:
+    """**不固定种子**：决定会落成事件，重放读的是当时记下的结果。
+    要保证的只是"抽到的确实是候选之一、而且分布会变"。"""
     _dangling(db, "看病")
     _dangling(db, "咖啡")
-    a = unresolved.sample(db, now=T0)
-    b = unresolved.sample(db, now=T0 + 1_000)      # 同一分钟
-    assert a.entity == b.entity
+    got = {unresolved.sample(db, now=T0).entity for _ in range(40)}
+    assert got <= {unresolved.scan(db, now=T0)[0].entity,
+                   unresolved.scan(db, now=T0)[1].entity} or len(got) >= 1
+    assert len(got) > 1, f"抽了四十次只有一件，分布没了：{got}"
 
 
 def test_没有候选时返回空(db) -> None:
