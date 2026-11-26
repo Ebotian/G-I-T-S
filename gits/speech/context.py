@@ -52,6 +52,9 @@ class RelationSnapshot:
     #: 情绪那一行（affect.distribution 渲染出来的）。空 = 不说。
     #: **说分布，不说结论**："最近偏生气" 可以核对，"她在生气" 不行。
     affect: str = ""
+    #: 说话的样子（style.py 算出来的）。空 = 没什么特别要调的。
+    #: **这一行会变**，所以只能在 B 段；塞进 A 段会把缓存前缀打碎。
+    style: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,6 +123,7 @@ def render_b(snap: RelationSnapshot) -> str:
         f"你最近在意：{hubs}\n"
         f"此刻的状态：{snap.phase}\n"
         + (f"{snap.affect}\n" if snap.affect else "")
+        + (f"{snap.style}\n" if snap.style else "")
     )
 
 

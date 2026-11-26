@@ -109,10 +109,18 @@ def since_last_open(db: DB, *, now: int) -> int | None:
     return max(0, now - int(row["t"]))
 
 
+def _seed_text(db: DB, *, now: int) -> str:
+    """拿什么当"此刻的上下文"。最近一条收到的消息——那是共鸣的源头。"""
+    row = db.one("SELECT payload FROM events WHERE kind='msg_in'"
+                 " ORDER BY id DESC LIMIT 1")
+    return (row["payload"] or b"").decode("utf-8", "replace") if row else ""
+
+
 def inputs(db: DB, *, now: int, phase_allows: bool = True,
            channel_online: bool = True, backlog_pressure: float = 0.0,
            reciprocity: float | None = None, consecutive: int = 0,
-           tau_hours: float = TAU_HOURS) -> tuple[GateInputs, float, Dangling | None]:
+           tau_hours: float = TAU_HOURS,
+           actor: str = "her") -> tuple[GateInputs, float, Dangling | None]:
     """把图里的东西折成 GateInputs + 压力 + 那件悬着的事。"""
     best = None
     cands = scan(db, now=now, limit=1)
@@ -121,9 +129,19 @@ def inputs(db: DB, *, now: int, phase_allows: bool = True,
     elapsed = since_last_open(db, now=now)
     # 从没主动开口过：按"已经憋了很久"算，否则第一次永远发不出去
     p = 1.0 if elapsed is None else pressure(elapsed, tau_hours=tau_hours)
+
+    # 共鸣：他刚说的话和哪段旧记忆有多像。**已经有了**——recall 本来就按刺激召回，
+    # 取最高相似度即可，不需要向量、不需要额外调用。
+    from gits.memory.recall import recall
+    from gits.social import state as slow
+
+    hits = recall(db, _seed_text(db, now=now), actor=actor, now_ms=now, k=3)
+    resonance = max((h.sim for h in hits), default=0.0)
+
     return (GateInputs(
         phase_allows=phase_allows, channel_online=channel_online,
         unexcluded=best.unexcluded if best else 0.0,
         resolvable=best.resolvable if best else 0.0,
         backlog_pressure=backlog_pressure, reciprocity=reciprocity,
-        consecutive=consecutive), p, best)
+        consecutive=consecutive, resonance=resonance,
+        confidence=slow.read(db, actor, "confidence", now=now)), p, best)

@@ -94,11 +94,13 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
     from gits.social.affect import line as affect_line
+    from gits.speech.style import line as style_line
 
     return RelationSnapshot(
         bucket=bucket(now),
         summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
-        hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now))
+        hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now),
+        style=style_line(db, actor, now=now))
 
 
 def pending(db: DB, *, limit: int = 3) -> list[dict]:

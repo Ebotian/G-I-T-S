@@ -130,10 +130,15 @@ def evolve(cells: dict[tuple[str, int], float], dt_ms: int, *,
 
 
 def decay(dt_ms: int, *, tau_hours: float = TAU_HOURS) -> float:
-    """纯衰减系数。情绪会散——这是它和记忆最大的区别。"""
+    """纯衰减系数。情绪会散——这是它和记忆最大的区别。
+
+    统一写法：衰减 = 朝 0 的均值回归（time/regulation.py）。
+    """
     if dt_ms <= 0:
         return 1.0
-    return math.exp(-(dt_ms / 3_600_000) / tau_hours)
+    from gits.time.regulation import relax
+
+    return relax(1.0, 0.0, tau_hours, dt_ms / 3_600_000)
 
 
 def advance(cells: dict[tuple[str, int], float], dt_ms: int,

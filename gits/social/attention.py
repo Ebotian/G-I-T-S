@@ -149,7 +149,9 @@ def overlap_pressure(overlap: float | None, *, baseline: float = 0.15,
 # 同时，从没被种过但一直被提到的话题会**自己长出来**：
 # 否则注意力就被冻在种子那一刻，而生活早就换话题了。
 
-OBSERVE_LAMBDA = 0.05     # 每天锚点朝观测值挪多少
+OBSERVE_LAMBDA = 0.05     # （旧）每天锚点朝观测值挪多少——等价于 τ≈480h
+#: 真实参数用时间常数表达：τ = 20 天。OBSERVE_LAMBDA 只留作对照。
+OBSERVE_LAMBDA_TAU_HOURS = 480.0
 NEUTRAL = 1.0             # 没被提到 = 中性，不是 0（0 会让它永不可能被想起）
 WINDOW_DAYS = 7           # 观测窗口
 #: 收缩强度：相当于「几个伪观测」。n=1 时置信 0.25，n=9 时 0.75。
@@ -223,7 +225,16 @@ def reestimate(db: DB, actor: str, *, now: int) -> dict[str, float]:
     with Writer(db).txn() as c:
         for topic, (w, base) in live.items():
             tgt = _target(counts.get(topic, 0), avg)
-            new_base = round(base + OBSERVE_LAMBDA * (tgt - base), 6)
+            # 均值回归统一走 time/regulation.py：
+            # 以前这里是 base + λ(target−base)，其实同一个公式的另一种写法。
+            # 用锚点自己的 updated_ts 算 dt，所以调用频率不影响结果。
+            from gits.time.regulation import relax
+
+            last = db.scalar("SELECT updated_ts FROM attention"
+                             " WHERE actor_id=? AND topic=?", (actor, topic))
+            dt_h = max(0.0, (now - int(last or now)) / 3_600_000)
+            tau_h = OBSERVE_LAMBDA_TAU_HOURS
+            new_base = round(relax(base, tgt, tau_h, dt_h), 6)
             # **一直挪，别在快到的时候停下。**早先写成"步子小于 0.01 就不动"，
             # 结果锚点永远停在 1.19 回不到 1.0——指数衰减的尾巴正好落在阈值上。
             # 阈值只用来决定"值不值得记一条事件"。

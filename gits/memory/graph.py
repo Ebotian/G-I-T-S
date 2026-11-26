@@ -29,11 +29,17 @@ TAU_DAYS = 30.0
 
 
 def decay(now: int, last: int | None, *, tau_days: float = TAU_DAYS) -> float:
-    """从 last 到现在衰减了多少。没有 last 就当没衰减。"""
+    """从 last 到现在衰减了多少。没有 last 就当没衰减。
+
+    **统一写法**：衰减 = 朝 0 的均值回归（time/regulation.py）。
+    以前这里是手写的 exp，和 attention、affect 各写各的。
+    """
     if not last:
         return 1.0
-    dt = max(0, now - int(last))
-    return math.exp(-dt / (tau_days * DAY))
+    from gits.time.regulation import relax
+
+    dt_hours = max(0, now - int(last)) / 3_600_000
+    return relax(1.0, 0.0, tau_days * 24.0, dt_hours)
 
 
 def add_edge(conn: sqlite3.Connection, *, src: str, dst: str, kind: str,

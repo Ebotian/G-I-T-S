@@ -206,7 +206,7 @@ class Shell:
         而她其实只被回了一次。改成：**只挂还没有 reply 的那条**。
         """
         row = self.db.one(
-            "SELECT o.id FROM outbox o WHERE o.status='sent'"
+            "SELECT o.id, o.ts FROM outbox o WHERE o.status='sent'"
             " AND NOT EXISTS (SELECT 1 FROM outcomes x"
             "                 WHERE x.outbox_id=o.id AND x.kind='reply')"
             " ORDER BY o.id DESC LIMIT 1")
@@ -215,6 +215,14 @@ class Shell:
         with self.w.txn() as c:
             c.execute("INSERT INTO outcomes(outbox_id, ts, kind, ref_event_id)"
                       " VALUES(?,?,?,NULL)", (row["id"], t, "reply"))
+        # **行为事件驱动慢变量**（不硬编码语气/长度/文风，那由 style.py 算）。
+        # 回得快/慢是可观测的，比模型对一句话的情绪判断可靠得多。
+        from gits.social import state as slow
+
+        latency_h = max(0.0, (t - int(row["ts"])) / 3_600_000)
+        slow.observe_event(self.db, "her",
+                           "reply_fast" if latency_h <= 1.0 else "reply_slow",
+                           now=t)
 
     # ── 一拍 ──
     def tick(self, t: int | None = None) -> dict:

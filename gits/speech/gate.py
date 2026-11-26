@@ -30,6 +30,8 @@ SEND_DECAY = 0.85
 THRESHOLD = 0.15
 #: 压力最多把门槛压低多少（1.0 = 压到 0，那等于没有门槛）
 MAX_DROP = 0.6
+#: 共鸣最多把价值抬高多少（0.35 → 最多 ×1.35）
+RESONANCE_GAIN = 0.35
 
 #: 互惠系数估不出来时的兜底（中性，不鼓励也不抑制）
 RECIPROCITY_FALLBACK = 0.5
@@ -79,6 +81,8 @@ class GateInputs:
     backlog_pressure: float = 0.0        # 积压重时她在消化（§15.7）
     reciprocity: float | None = None     # None → 用兜底值并标注
     consecutive: int = 0                 # 连续开口次数
+    resonance: float = 0.0               # 共鸣：他刚说的话和哪段旧记忆有多像
+    confidence: float | None = None       # 底气：慢变量，None → 不参与
 
 
 @dataclass(frozen=True)
@@ -90,13 +94,20 @@ class GateResult:
 
 def open_value(i: GateInputs) -> float:
     recip = RECIPROCITY_FALLBACK if i.reciprocity is None else i.reciprocity
-    return (
+    v = (
         max(0.0, min(1.0, i.unexcluded))
         * max(0.0, min(1.0, i.resolvable))
         * max(0.0, min(1.0, 1.0 - i.backlog_pressure))
         * max(0.0, min(1.0, recip))
         * (SEND_DECAY ** max(0, i.consecutive))
     )
+    # 共鸣：「这句话让我想起以前那件事」。有界，且只在上限内抬高。
+    v *= 1.0 + RESONANCE_GAIN * max(0.0, min(1.0, i.resonance))
+    # 底气：慢变量。底气低的时候，同样的证据也不够让她开口。
+    # 0.5 是中性（不奖不罚），所以 None 时等于 1.0。
+    if i.confidence is not None:
+        v *= 0.5 + max(0.0, min(1.0, i.confidence))
+    return min(1.0, v)
 
 
 def threshold_for(pressure: float) -> float:
