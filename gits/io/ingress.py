@@ -156,7 +156,16 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/loc":
             return self._no()
         now = time.time()
-        if not st["verifier"].allow(self.client_address[0], now):
+        # **只在来自本机时信 X-Forwarded-For。**
+        # 前面挂 nginx 之后，所有连接的对端都是 127.0.0.1——
+        # 按它限流等于全世界共用一个桶，一个人就能把别人锁在外面。
+        # 只信本机来的头，是因为只有本机的 nginx 能写它。
+        client = self.client_address[0]
+        if client in ("127.0.0.1", "::1"):
+            fwd = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            if fwd:
+                client = fwd
+        if not st["verifier"].allow(client, now):
             return self._no()
         try:
             n = int(self.headers.get("Content-Length") or 0)

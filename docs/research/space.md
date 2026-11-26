@@ -342,3 +342,30 @@ Conscrypt 的带着后量子密钥分享（MLKEM），有些 DPI 盒子会对不
    不用改 SG，立刻能验证 DPI 猜想；代价是位置数据经过 Cloudflare 一跳。
 
 我的建议：先试 1（数据不经第三方），不行再试 2 验证猜想。
+## 17. 挂上 Cloudflare 之后：TLS 换了 nginx 终结
+
+### 为什么换
+
+BoringSSL 系的客户端（Android Conscrypt、Cloudflare 边缘）握手全失败，
+而 OpenSSL 系的（curl/openssl）一直成功。两个 BoringSSL 客户端对同一个 Python/OpenSSL
+服务端都是「发完 ClientHello 就断开」，服务端看到 `Closed before TLS handshake with data in recv buffer`。
+
+换成 nginx 终结 TLS 后这条不用再查下去了——**TLS 是标准件，不该自己实现**。
+
+    客户端 --TLS--> nginx:443 / :8443 --HTTP--> 127.0.0.1:8444 ingress（明文，只在本机）
+
+### 一个必须记住的副作用
+
+挂上反向代理之后，ingress 看到的所有对端都是 127.0.0.1。
+按它限流等于**全世界共用一个桶**——一个人就能把别人锁在外面。
+所以：只有在连接来自本机时（127.0.0.1/::1）才信 X-Forwarded-For，
+因为只有本机的 nginx 能写这个头。
+
+### Cloudflare 那边
+
+    A 记录橙云      解析到 104.21.49.16 / 172.67.158.10（还有 IPv6）
+    Universal SSL   已签发，CN=foxtest.icu（覆盖 *.foxtest.icu）
+    客户端用 443    Cloudflare 回源也走 443 —— 所以源站必须听 443
+    客户端用 8443   Cloudflare 回源仍然 443（备用端口只对入站生效），于是 525
+
+结论：**橙云 + 源站 443** 是唯一不折腾的组合。
