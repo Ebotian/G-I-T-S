@@ -78,3 +78,4 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/memory-data.md`](docs/research/memory-data.md) — 记忆的实验数据与一个否定结论：合成数据能测实现、不能测理论
 - [`docs/research/replica.md`](docs/research/replica.md) — 可恢复的单向副本：游标语义、verify 在比什么、刻意没做的三件事
 - [`docs/research/autonomy.md`](docs/research/autonomy.md) — 她不在你面前时用什么额度做什么：三等分、日清、形式自由、内容不可见
+- [`docs/research/convergent.md`](docs/research/convergent.md) — 共同被独立实现的机制：八条不变式、各自破过的地方、怎么防止被改回去
