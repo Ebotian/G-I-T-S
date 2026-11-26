@@ -223,3 +223,35 @@ def test_共鸣绑在同一条候选上(db) -> None:
     # 抽到咖啡时，共鸣才该是高的；抽到看病时不该被咖啡拉高
     if unresolved.name_of(db, best.entity) == "咖啡":
         assert i.resonance > 0, "抽到咖啡却没算出共鸣"
+
+
+def test_回复落库前一定收成整句(db) -> None:
+    """模型被 max_tokens 掐断时，落进 outbox 的必须是完整的句子。"""
+    import json as _j
+
+    from gits.core import project
+    from gits.memory.persona import seed
+    from gits.speech import respond as R
+    from gits.speech.llm import Reply
+
+    seed(db, "我不太会哄人。", now=T0)
+    ev, _ = Writer(db).append_event(source="shell", kind="msg_in", ext_id="m1",
+                                    ts=T0, recv_ts=T0, payload="在吗".encode())
+    Writer(db).append_model_call(
+        kind="extract", model="stub", event_id=ev,
+        response=_j.dumps({"summary": "他打了招呼", "entities": [],
+                           "claims": []}, ensure_ascii=False))
+    project.restore(db)
+
+    orig = R.chat
+    R.chat = lambda *a, **k: Reply(
+        text="我查了一下，蚂蚁靠触角认路，还有", model="stub",
+        usage={"prompt_tokens": 100}, latency_ms=1)
+    try:
+        R.respond(db, R.pending(db)[0], now=T0)
+    finally:
+        R.chat = orig
+
+    text = db.scalar("SELECT text FROM outbox ORDER BY id DESC LIMIT 1")
+    assert "查了一下" not in text, f"交差腔漏出去了：{text}"
+    assert not text.endswith(("，", "、")), f"半截话漏出去了：{text}"

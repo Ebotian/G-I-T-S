@@ -84,6 +84,8 @@ def recent(db: DB, *, actor: str = "her", from_id: int | None = None,
 
 #: C 段里放几条记忆。频带分配的上限就是这个数。
 SLOTS = 5
+#: 一条微信最多多少字（清洗时的硬帽）
+REPLY_CAP_CHARS = 400
 
 
 def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
@@ -167,6 +169,12 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
     reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
+
+    # **出口清洗**：整句收笔、洗链接、去交差腔。
+    # max_tokens 是保险丝不是尺——顶头会拦腰掐断，一条微信停在逗号上比不发更糟。
+    from gits.speech.clean import clean
+
+    reply.text = clean(reply.text, cap=REPLY_CAP_CHARS)
 
     # **成功之后才强化**（spacing effect）。放在模型调用之前的话，
     # 一次失败的请求也会把 s 顶上去——那条记忆其实没被用上。

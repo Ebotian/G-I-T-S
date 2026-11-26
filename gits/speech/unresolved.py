@@ -74,6 +74,8 @@ def scan(db: DB, *, now: int, limit: int = 5) -> list[Dangling]:
         mentions, known, strength = about(db, eid, now=now)
         if mentions < MIN_MENTIONS:
             continue
+        if burned(db, eid, now=now):
+            continue                      # 翻篇了：问了多少回都没有新东西
         unexcluded = 1.0 - min(1.0, known / ENOUGH)
         # 强度映射到 (0,1)：提得越多、越近，越热。没有上限，用比值而非绝对值
         hot = strength / (strength + 1.0)
@@ -179,3 +181,58 @@ def inputs(db: DB, *, now: int, channel_online: bool = True, backlog_pressure: f
         consecutive=consecutive, resonance=resonance,
         confidence=slow.read(db, actor, "confidence", now=now),
         drive=drive_read(db, actor, now=now)), p, best)
+
+# ── 反刍闸：没答案的问题会自我喂养 ────────────────────────────
+#
+# 我们这里有一条真实的自我喂养回路：
+#   一个实体被反复提到、却始终没有 claims 边 → unexcluded 一直是 1.0
+#   → 它每次都排在候选前面 → 她每次都想着问它 → 问不出来 → 还是 1.0
+#
+# 社区实测的结论很直白：**只拦不引会变成空转**，所以拦下来之后
+# 要么换一件，要么明确"这件事到此为止"。这里只做"拦 + 冷却"，
+# 换题交给 sample() 的下一次抽样。
+
+#: 多少次"问了也没有新东西"之后翻篇
+STRIKES_TO_BURN = 3
+#: 翻篇多久
+BURN_HOURS = 96
+
+
+def strikes(db: DB, eid: str, *, now: int) -> int:
+    row = db.one("SELECT strikes, known_at, last_ts FROM rumination"
+                 " WHERE entity=?", (eid,))
+    if row is None:
+        return 0
+    if (now - int(row["last_ts"])) > BURN_HOURS * 3_600_000:
+        return 0                      # 太久没提，旧账不算
+    return int(row["strikes"])
+
+
+def burned(db: DB, eid: str, *, now: int) -> bool:
+    return strikes(db, eid, now=now) >= STRIKES_TO_BURN
+
+
+def record_use(db: DB, eid: str, *, known: int, now: int) -> int:
+    """记一次"又被选中了"。**只有真的拿它去开口才该记**，不是每次扫描都记。
+
+    如果已知条数比上次多了，说明这回真问出东西了——清零重来。
+    """
+    from gits.core.db import Writer
+
+    row = db.one("SELECT strikes, known_at, last_ts FROM rumination"
+                 " WHERE entity=?", (eid,))
+    if row is None:
+        n, known_at = 1, known
+    elif known > int(row["known_at"]):
+        n, known_at = 1, known          # 有新证据，重新算
+    elif (now - int(row["last_ts"])) > BURN_HOURS * 3_600_000:
+        n, known_at = 1, known
+    else:
+        n, known_at = int(row["strikes"]) + 1, int(row["known_at"])
+    with Writer(db).txn() as c:
+        c.execute(
+            "INSERT INTO rumination(entity, strikes, known_at, last_ts)"
+            " VALUES(?,?,?,?) ON CONFLICT(entity) DO UPDATE SET"
+            " strikes=?, known_at=?, last_ts=?",
+            (eid, n, known_at, now, n, known_at, now))
+    return n
