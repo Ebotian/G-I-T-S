@@ -369,6 +369,65 @@ def cmd_world(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schema_check(args: argparse.Namespace) -> int:
+    """**生产库的结构和仓库里的迁移对得上吗。**
+
+    被两件事逼出来的：018 改过之后生产库缺 affect_state；018 又改过之后
+    affect 多了一列 last_ts。两次都是"文件改了、库没变"，而单元测试永远看不到
+    ——测试库是从零迁移的。
+
+    做法很笨但直接：拿一个**空的临时库**跑完全部迁移，然后逐表逐列比对。
+    """
+    import sqlite3
+    import tempfile
+    from pathlib import Path as _P
+
+    def shape(conn) -> dict[str, list[tuple]]:
+        out = {}
+        for (name,) in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+                " AND name NOT LIKE 'sqlite_%'"):
+            out[name] = [(r[1], (r[2] or "").upper(), r[3], r[4])
+                         for r in conn.execute(f"PRAGMA table_info({name})")]
+        return out
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh_path = _P(tmp) / "fresh.db"
+        DB(fresh_path).close()
+        fresh = shape(sqlite3.connect(fresh_path))
+    live = shape(sqlite3.connect(f"file:{args.db}?mode=ro", uri=True))
+
+    missing = sorted(set(fresh) - set(live))
+    extra = sorted(set(live) - set(fresh))
+    drift = []
+    for name in sorted(set(fresh) & set(live)):
+        f_cols = {c[0]: c for c in fresh[name]}
+        l_cols = {c[0]: c for c in live[name]}
+        for col, spec in f_cols.items():
+            if col not in l_cols:
+                drift.append(f"{name}.{col} 缺（{spec[1]}，notnull={spec[2]}）")
+            elif l_cols[col][1] != spec[1]:
+                drift.append(f"{name}.{col} 类型 {l_cols[col][1]} != {spec[1]}")
+        for col in sorted(set(l_cols) - set(f_cols)):
+            drift.append(f"{name}.{col} 多出来（库里 {l_cols[col][1]}"
+                         f"，notnull={l_cols[col][2]}）")
+
+    # **"多出来的表"只提示，不算错。**FTS 的影子表（node_fts_*）、旧版本留下的表
+    # 都在这一类里；它们不影响现在的代码，报成错误只会让人习惯性忽略这个检查。
+    if extra:
+        print("（多出来的表，不影响使用：" + ", ".join(extra) + "）")
+    if not (missing or drift):
+        print(f"结构一致：{len(fresh)} 张表")
+        return 0
+    if missing:
+        print("缺表：" + ", ".join(missing))
+    for d in drift:
+        print("  " + d)
+    print(f"\n{len(drift) + len(missing)} 处不一致。"
+          "改老迁移对已有库无效——新结构要加新文件。")
+    return 1
+
+
 def cmd_backup(args: argparse.Namespace) -> int:
     """做一份备份并验证它。**坏的备份比没有备份更危险。**"""
     from gits.core import backup
@@ -787,6 +846,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--monthly", type=float, default=200.0)
     q.add_argument("--balance", type=float, default=0.0)
     q.set_defaults(fn=cmd_quota)
+    sc = sub.add_parser("schema-check", help="生产库结构和迁移对得上吗")
+    sc.set_defaults(fn=cmd_schema_check)
     bk = sub.add_parser("backup", help="做一份备份并验证它")
     bk.add_argument("--dest", default=None)
     bk.add_argument("--keep", type=int, default=None)

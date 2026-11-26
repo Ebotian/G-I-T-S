@@ -61,12 +61,18 @@ def run(chat: Callable[..., Reply], body: list[dict], *, catalog: tuple[dict, ..
 
     used = 0
     msgs = list(body)
-    # 模型的"我想查"必须原样放回去，否则第二次请求里它会以为自己没说过
+    # **声明了几个 tool_call，就得有几条对应的 tool 消息。**
+    # 模型偶尔一口气要查三样东西；我们只执行一个（MAX_CALLS），但协议要求
+    # 每一条都有回音——少了就 400：
+    #   "An assistant message with 'tool_calls' must be followed by tool messages
+    #    responding to each 'tool_call_id'"
+    # 这真的在线上发生过一次：那一轮整条回复丢了。
+    # 做法是把超出预算的调用**从回放的 assistant 消息里去掉**，
+    # 让"说过的话"和"回音"始终对得上。
+    calls = calls[:MAX_CALLS]
     msgs.append({"role": "assistant", "content": first.text or "",
                  "tool_calls": calls})
     for call in calls:
-        if used >= MAX_CALLS:
-            break
         fn = (call.get("function") or {})
         name = str(fn.get("name") or "")
         try:

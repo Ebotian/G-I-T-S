@@ -115,7 +115,10 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
 
     return RelationSnapshot(
         bucket=bucket(now),
-        summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
+        # **"记下 N 件事"这个数每抽取一条消息就 +1，于是 B 段每轮必变，
+        # 前缀每轮断一次。**实测：13 轮里 B 变了 8 次，命中率掉到 27%。
+        # 而且它本来就不该出现——一个人不知道自己的记忆库里有几条记录。
+        summary=f"认识第 {days} 天。" if n else "还没记下什么。",
         hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=t),
         style=style_line(db, actor, now=t),
     )
