@@ -107,29 +107,45 @@ public class MainActivity extends Activity {
         sv.addView(root);
         setContentView(sv);
 
-        // **可脚本化**：装完用 am start 带参数一次配好，不用手点。
-        //   adb shell am start -n com.botian.gitsloc/.MainActivity \
-        //       --es secret XXX --ez start true --ez once true
-        Intent in = getIntent();
-        if (in != null && in.getStringExtra("secret") != null) {
+        applyIntent(getIntent(), url, secret);
+        refresh();
+    }
+
+    /**
+     * 可脚本化：装完用 am start 带参数一次配好，不用手点。
+     *
+     * 必须同时被 onCreate 和 onNewIntent 调用——活动已经在跑的时候，
+     * am start 走的是 onNewIntent；只写在 onCreate 里，第二次开始就不灵了。
+     * 这个坑让诊断脚本空转了半小时。
+     */
+    private void applyIntent(Intent in, EditText url, EditText secret) {
+        if (in == null) return;
+        if (in.getStringExtra("secret") != null) {
             Cfg.save(this, in.getStringExtra("url") == null
                             ? Cfg.DEFAULT_URL : in.getStringExtra("url"),
                      in.getStringExtra("secret"));
-            url.setText(Cfg.url(this));
-            secret.setText(Cfg.secret(this));
+            if (url != null) url.setText(Cfg.url(this));
+            if (secret != null) secret.setText(Cfg.secret(this));
         }
-        refresh();
-        if (in != null && in.getBooleanExtra("start", false)) {
+        if (in.getBooleanExtra("start", false)) {
             askPermissions();
             Registrar.start(this);
         }
-        if (in != null && in.getBooleanExtra("once", false)) {
+        if (in.getBooleanExtra("once", false)) {
             new Thread(() -> {
                 LocReceiverProbe.fire(this);
                 Uploader.drain(this);
                 runOnUiThread(this::refresh);
             }).start();
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyIntent(intent, null, null);
+        refresh();
     }
 
     private LinearLayout labelled(String name, View v) {
