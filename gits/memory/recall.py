@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gits.core.db import DB
+from gits.core.db import DB, Writer
 from gits.memory.fsrs import DAY, retrievability
 from gits.core.scope import visible
 from gits.memory.search import Hit, index_node, search
@@ -150,6 +150,30 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
         if len(out) >= k:
             break
     return out
+
+
+def reinforce_hits(db: DB, rows: list[Recalled], *, now_ms: int,
+                   limit: int = 5) -> int:
+    """**真的被用进上下文之后**才巩固。返回强化了几条。
+
+    为什么不在 recall() 里做：读路径不该写库，而且「召回了但最后没用上」
+    不该算一次练习。间隔效应的前提是**取用**，不是**候选**。
+
+    只强化前 `limit` 条——上下文里真有位置的才那么几条。
+    """
+    from gits.memory.fsrs import reinforce
+
+    n = 0
+    for r in rows[:limit]:
+        row = db.one("SELECT s, d, last_touch FROM nodes WHERE id=?", (r.node_id,))
+        if row is None or row["last_touch"] is None or not row["s"]:
+            continue
+        s_new, d_new = reinforce(float(row["s"]), row["d"], float(r.r))
+        with Writer(db).txn() as c:
+            c.execute("UPDATE nodes SET s=?, d=?, last_touch=? WHERE id=?",
+                      (s_new, d_new, now_ms, r.node_id))
+        n += 1
+    return n
 
 
 def lines(rows: list[Recalled]) -> tuple[str, ...]:

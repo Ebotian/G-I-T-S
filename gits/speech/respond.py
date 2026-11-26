@@ -19,7 +19,7 @@ from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext, ass
                           bucket, messages)
 from gits.core.db import DB, Writer, now_ms
 from gits.speech.llm import Reply, chat, cost_cny
-from gits.memory.recall import lines, recall
+from gits.memory.recall import lines, recall, reinforce_hits
 from gits.core.scope import visible
 
 DEFAULT_PERSONA = "我不太会哄人。但我记得住你说过的东西。"
@@ -129,6 +129,9 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
                       due=fact_lines(db, now))
+    # **被用上了才算一次练习**（spacing effect）。放在这里而不是 recall() 里：
+    # 读路径不写库，而且「召回了但没进上下文」不该算。
+    reinforce_hits(db, hits, now_ms=now)
     prompt = assemble(seed, snap, ctx)
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())

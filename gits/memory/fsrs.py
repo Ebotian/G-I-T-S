@@ -216,3 +216,40 @@ def _angle_distance(a: str, b: str, angles: tuple[str, ...]) -> float:
     n = len(angles)
     d = abs(i - j) % n
     return (min(d, n - d)) / (n / 2)
+
+
+# ── 检索即强化：spacing effect 的落地 ────────────────────────
+#
+# 在这之前，`s` **只在创建时被写一次**。一条记忆被想起来十次和一次，
+# 稳定性完全一样——于是「反复间隔重复的东西越来越牢」这句话在代码里是假的。
+#
+# 强化的时机放在**真的被用进上下文之后**，不是 recall() 里：
+# 读路径不该写库（它在热路径上，而且「召回了但没用」不该算一次练习）。
+
+#: 没有难度记录时用中值（FSRS 的 D 在 1..10）
+DEFAULT_D = 5.0
+#: 单次强化的上限倍数。FSRS 的公式是为**主动复习**设计的——
+#: 在 r=0.2 时它会给出 36 倍。被动想起不该等价于一次刻意的复习。
+REINFORCE_MAX_GAIN = 3.0
+
+
+def reinforce(s: float, d: float | None, r: float) -> tuple[float, float]:
+    """被想起来一次之后的新 (s, d)。
+
+    评分固定取 **g=3（Good）**：它被用上了，这就够了。
+    不去猜「她费了多大劲」——那是我们无法观测的东西。
+
+    间隔效应由公式本身负责：注意 `(e^(w10·(1−r)) − 1)` 这一项，
+    **r 越低，涨得越多**。间隔越久还想起得来，巩固就越强。
+    
+    顺带说明：w15/w16（hard penalty / easy bonus）仍然没用——
+    它们要真正的评分，而我们还没有。宁缺毋滥。
+    """
+    d0 = DEFAULT_D if d is None else max(1.0, min(10.0, float(d)))
+    r0 = max(0.0, min(1.0, float(r)))
+    s0 = max(0.1, float(s))
+    s_new = next_stability(s0, d0, r0, 3)
+    # 被动想起 ≠ 主动复习，涨得太猛就打住（见 REINFORCE_MAX_GAIN 的说明）
+    s_new = min(s_new, s0 * REINFORCE_MAX_GAIN)
+    d_new = next_difficulty(d0, 3)
+    return max(0.1, s_new), d_new

@@ -161,3 +161,97 @@ def test_没有情绪记忆时不影响排序(db) -> None:
     affect.observe(db, "her", angle="anger", intensity=3, ts=T0)
     got = {r.node_id for r in recall(db, "开会", actor="her", now_ms=T0)}
     assert got == {a, b}
+
+
+# ── 检索即强化（spacing effect）──────────────────────────────
+
+
+def test_强化让稳定性涨(db) -> None:
+    s, d = fsrs.reinforce(3.0, 5.0, 0.5)
+    assert s > 3.0 and 1.0 <= d <= 10.0
+
+
+def test_越难想起来涨得越多(db) -> None:
+    """间隔效应的核心：r 越低还想起得来，巩固越强。"""
+    low = fsrs.reinforce(3.0, 5.0, 0.2)[0]
+    high = fsrs.reinforce(3.0, 5.0, 0.95)[0]
+    assert low > high > 3.0
+
+
+def test_单次强化有上限(db) -> None:
+    """FSRS 是为**主动复习**设计的：r=0.2 时它给出 36 倍。
+
+    被动想起不该等价于一次刻意的复习。
+    """
+    s, _d = fsrs.reinforce(3.0, 5.0, 0.0)
+    assert s == pytest.approx(3.0 * fsrs.REINFORCE_MAX_GAIN)
+
+
+def test_没有难度的节点用中值(db) -> None:
+    a, d = fsrs.reinforce(3.0, None, 0.5)
+    assert d == pytest.approx(fsrs.next_difficulty(fsrs.DEFAULT_D, 3), abs=1e-9)
+
+
+def test_真的用上才强化(db) -> None:
+    a = _apply(db, "m1", T0, entities=[], summary="开会开到吐")
+    reindex(db)
+    later = T0 + 5 * DAY
+    hits = recall(db, "开会", actor="her", now_ms=later)
+    before = db.scalar("SELECT s FROM nodes WHERE id=?", (a,))
+    assert db.scalar("SELECT s FROM nodes WHERE id=?", (a,)) == before, \
+        "recall 是读路径，不该改状态"
+
+    from gits.memory.recall import reinforce_hits
+
+    assert reinforce_hits(db, hits, now_ms=later) == 1
+    assert db.scalar("SELECT s FROM nodes WHERE id=?", (a,)) > before
+
+
+def test_r_接近一时强化无效(db) -> None:
+    """刚创建就想起，等于没有练习——FSRS 的本意，不是 bug。"""
+    s, _d = fsrs.reinforce(3.0, 5.0, 1.0)
+    assert s == pytest.approx(3.0)
+
+
+def test_只强化前几条(db) -> None:
+    ids = [_apply(db, f"m{i}", T0, entities=[], summary=f"开会第{i}次")
+           for i in range(8)]
+    reindex(db)
+    hits = recall(db, "开会", actor="her", now_ms=T0, k=8)
+    from gits.memory.recall import reinforce_hits
+
+    assert reinforce_hits(db, hits, now_ms=T0 + DAY, limit=3) == 3
+
+
+# ── 端到端：情绪强的记忆确实留存更久 ─────────────────────────
+
+
+def test_情绪强的记忆两周后更容易被想起(db) -> None:
+    low = _apply(db, "m1", T0, entities=[], summary="开会这件事一般般",
+                 affect_pair=("joy", 1))
+    high = _apply(db, "m2", T0, entities=[], summary="开会这件事吵起来了",
+                  affect_pair=("anger", 3))
+    reindex(db)
+
+    s_low = db.scalar("SELECT s FROM nodes WHERE id=?", (low,))
+    s_high = db.scalar("SELECT s FROM nodes WHERE id=?", (high,))
+    assert s_high > s_low
+
+    later = recall(db, "开会", actor="her", now_ms=T0 + 14 * DAY, k=10)
+    scores = {r.node_id: r.score for r in later}
+    assert scores.get(high, 0) > scores.get(low, 0), f"两周后情绪强的那条该排前面：{[(r.node_id, round(r.score, 3)) for r in later]}"
+
+
+def test_强化之后更耐忘(db) -> None:
+    a = _apply(db, "m1", T0, entities=[], summary="开会开到吐")
+    reindex(db)
+    from gits.memory.recall import reinforce_hits
+
+    hits = recall(db, "开会", actor="her", now_ms=T0 + 5 * DAY)
+    reinforce_hits(db, hits, now_ms=T0 + 5 * DAY)
+    s_after = db.scalar("SELECT s FROM nodes WHERE id=?", (a,))
+
+    # 同样的时间之后，强化过的 r 更高
+    from gits.memory.fsrs import retrievability
+
+    assert retrievability(30, s_after) > retrievability(30, 1.0)
