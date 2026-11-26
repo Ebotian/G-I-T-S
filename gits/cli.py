@@ -194,6 +194,26 @@ def cmd_loc(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ingress(args: argparse.Namespace) -> int:
+    """位置入口：唯一对公网开的那道门。只认 POST /loc。"""
+    import os
+
+    from gits.io import ingress
+
+    secret = os.environ.get("GITS_INGRESS_SECRET") or ""
+    if not secret:
+        print("  没配 GITS_INGRESS_SECRET")
+        return 2
+    cert = os.environ.get("GITS_TLS_CERT") or None
+    key = os.environ.get("GITS_TLS_KEY") or None
+    if (cert is None) != (key is None):
+        print("  GITS_TLS_CERT 和 GITS_TLS_KEY 要一起给")
+        return 2
+    print(f"  监听 :{args.port}  {'TLS' if cert else '明文（仅本地调试）'}  只认 POST /loc")
+    ingress.serve(db_path=args.db, secret=secret, port=args.port, cert=cert, key=key)
+    return 0
+
+
 def cmd_world(args: argparse.Namespace) -> int:
     """外面的世界：她此刻读到的天气。**读数落成事件，不是实时查询。**"""
     import time
@@ -542,6 +562,9 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("outbox_id", type=int)
     t.set_defaults(fn=cmd_trace)
 
+    ig = sub.add_parser("ingress", help="位置入口：唯一对公网开的门")
+    ig.add_argument("--port", type=int, default=8443)
+    ig.set_defaults(fn=cmd_ingress)
     lc = sub.add_parser("loc", help="手机上报一次位置（我们接收，不追踪）")
     lc.add_argument("--lat", type=float)
     lc.add_argument("--lon", type=float)

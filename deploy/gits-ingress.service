@@ -1,0 +1,28 @@
+[Unit]
+Description=G-I-T-S 位置入口（唯一对公网开的门，只认 POST /loc）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=her
+Group=gits
+SupplementaryGroups=gits
+EnvironmentFile=/etc/gits.env
+ExecStart=/srv/gits-runtime/.venv/bin/python -m gits.cli --db /var/lib/gits/her/gits.db ingress --port 8443
+Restart=always
+RestartSec=5
+
+# 这道门只需要写自己的库和联网查地理编码
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/gits/her
+InaccessiblePaths=/srv/gits /root /home
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=200M
+
+[Install]
+WantedBy=multi-user.target

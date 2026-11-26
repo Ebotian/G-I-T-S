@@ -108,6 +108,7 @@ chmod 0755 "$RUN"
 install -m 0644 "$SRC/deploy/gits-ghost.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-shell.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-housekeep.service" /etc/systemd/system/
+install -m 0644 "$SRC/deploy/gits-ingress.service" /etc/systemd/system/
 install -m 0644 "$SRC/deploy/gits-housekeep.timer" /etc/systemd/system/
 systemctl daemon-reload
 
