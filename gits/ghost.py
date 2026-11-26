@@ -105,6 +105,9 @@ class Ghost:
     #: 窗口决策。慢一点没关系——它只在积压时才有活干。
     ctx_ms: int = 60_000
     _last_ctx: int = 0
+    #: 主动开口的判定间隔。判定很便宜（几次查询），不用太密。
+    initiative_ms: int = 20 * 60_000
+    _last_initiative: int = 0
     #: 外面的世界（天气/位置）。**读数是事件**，装配只读日志，
     #: 所以这里只是采集，不是决策。取不到就跳过，不加时延。
     world_ms: int = 30 * 60_000
@@ -196,6 +199,10 @@ class Ghost:
             got = self.window(t)
             if got:
                 did["ctx"] = got
+        if t - self._last_initiative >= self.initiative_ms:
+            got = self.initiative(t)
+            if got:
+                did["initiative"] = got
         if t - self._last_world >= self.world_ms:
             got = self.world(t)
             if got:
@@ -212,6 +219,28 @@ class Ghost:
 
             drive_update(self.db, "her", now=t)
         return did
+
+    def initiative(self, t: int | None = None) -> str:
+        """该不该主动开口。**判定很便宜，真的开口才贵。**
+
+        以前这条路径是断的：gate 有逻辑、respond 支持 proactive，
+        但没有任何东西把它们连起来——决策机制齐了，没人按下按钮。
+        """
+        from gits.speech import initiative as I
+
+        t = now_ms() if t is None else t
+        self._last_initiative = t
+        try:
+            got = I.check(self.db, now=t)
+        except Exception as exc:
+            self.fault("initiative", exc, now=t)
+            return ""
+        if not got.get("allow"):
+            return ""
+        # 走到这里才算数：落一条 initiative 事件（记的是决定，不是内容）。
+        I.record(self.db, now=t, reason=str(got.get("why") or ""),
+                 candidate=got.get("candidate"))
+        return str(got.get("why") or "allow")
 
     def fault(self, where: str, exc: BaseException, *, now: int) -> None:
         """**静默失败要显示。**

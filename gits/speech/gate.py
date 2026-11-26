@@ -85,6 +85,9 @@ class GateInputs:
     resonance: float = 0.0               # 共鸣：他刚说的话和哪段旧记忆有多像
     confidence: float | None = None       # 底气：慢变量，None → 不参与
     drive: float | None = None            # 动量：正反馈，有界+限速+限加速度
+    #: 他这个时段通常在不在（0..1）。**是预测，不是门槛**——
+    #: 它按比例削弱价值，不做"低于某值就不许说"的硬判断。
+    presence: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,10 @@ def open_value(i: GateInputs) -> float:
     # 0.5 是中性（不奖不罚），所以 None 时等于 1.0。
     if i.confidence is not None:
         v *= 0.5 + max(0.0, min(1.0, i.confidence))
+    # 时机：他这个时段通常在不在。**按比例削弱，不做硬门槛。**
+    # 0.2 是下限——即使他从不在这个点说话，也不是绝对不许，只是要非常有话说。
+    if i.presence is not None:
+        v *= 0.2 + 0.8 * max(0.0, min(1.0, i.presence))
     # 动量：**正反馈**。说得密就更想开口，说得稀就更难开口。
     # 它自己带上界和限速（social/drive.py），所以这里不再夹一次。
     if i.drive is not None:
