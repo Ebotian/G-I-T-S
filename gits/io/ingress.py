@@ -100,12 +100,15 @@ def parse(body: bytes) -> dict[str, Any] | None:
     acc = raw.get("accuracy")
     elapsed = raw.get("elapsedMs", raw.get("elapsed_ms"))
     phone_ts = raw.get("phone_ts")
+    cached = raw.get("cached")
     return {
         "lat": lat, "lon": lon,
         "acc": float(acc) if isinstance(acc, (int, float)) else None,
         "source": str(raw.get("provider") or "network")[:16],
         "fix_ts": int(phone_ts) if isinstance(phone_ts, (int, float)) else None,
         "elapsed_ms": int(elapsed) if isinstance(elapsed, (int, float)) else None,
+        #: 让客户端明说。Termux 那边靠 elapsedMs < 50 推断，app 那边算 age 更准。
+        "cached": bool(cached) if isinstance(cached, bool) else None,
     }
 
 
@@ -119,7 +122,8 @@ def store(db: Any, data: dict[str, Any], *, now: int) -> tuple[int, bool]:
         city = loc.reverse(db, data["lat"], data["lon"], key=key)
     return loc.record(db, lat=data["lat"], lon=data["lon"], acc=data["acc"],
                       source=data["source"], fix_ts=data["fix_ts"], now=now,
-                      city=city, elapsed_ms=data["elapsed_ms"])
+                      city=city, elapsed_ms=data["elapsed_ms"],
+                      cached=data.get("cached"))
 
 
 class Handler(BaseHTTPRequestHandler):
