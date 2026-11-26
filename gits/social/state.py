@@ -34,16 +34,27 @@ CFG = {
 }
 
 #: 行为事件 → 各慢变量的增量。**没有一件事是模型判断出来的。**
-#: 注意 no_reply / long_silence 的负面幅度明显小于 reply_fast 的正面幅度：
-#: 沉默是含糊的，不能直接当成拒绝。
+#:
+#: 两条纪律：
+#:
+#: ① **沉默是含糊的**：no_reply / long_silence 的负面幅度明显小于 reply_fast 的正面幅度。
+#:
+#: ② **自己说「我做了」不算数**（借自心潮·念的 proof 设计）。
+#:    底气只由**外部确认**推动：他回了、回得快、说得长。
+#:    `initiate`（主动开口这件事本身）只推节奏，不推底气——
+#:    否则她越开口越有底气，而「我开口了」是我们自己的行为，不是世界给的证据。
+#:    这和我们刚修掉的三条反事实问题是同一个病。
 EVENT_DELTAS = {
     "reply_fast":   {"cadence": +0.06, "confidence": +0.03},
     "reply_slow":   {"cadence": +0.02, "confidence": +0.01},
     "long_reply":   {"cadence": +0.03, "confidence": +0.02},
-    "initiate":     {"cadence": +0.04, "confidence": +0.02},
+    "initiate":     {"cadence": +0.04},
     "no_reply":     {"cadence": -0.01, "confidence": -0.005},
     "long_silence": {"cadence": -0.03, "confidence": -0.01},
 }
+#: 只有这些事件能推底气——写成表，别散在 if 里。
+CONFIDENCE_EVENTS = frozenset(k for k, v in EVENT_DELTAS.items()
+                              if "confidence" in v)
 
 
 @dataclass(frozen=True)

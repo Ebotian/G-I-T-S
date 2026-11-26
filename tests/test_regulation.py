@@ -259,3 +259,48 @@ def test_压力能对抗向下的惯性(db) -> None:
     assert not gate.evaluate(low_drive).allow, "惯性下她不想说"
     assert gate.evaluate(low_drive, pressure=1.0).allow, \
         "但憋得够久，门槛降下来就能说——不是负反馈在压她"
+
+
+# ── 底气只认外部确认 ────────────────────────────────────────
+
+
+def test_自己开口不给自己加底气(db) -> None:
+    """「我开口了」是我们自己的行为，不是世界给的证据。
+
+    借自心潮·念的 proof 设计：做成事要有认可才算，自己宣布「做好了」不算。
+    """
+    from gits.social import state as slow
+
+    before = slow.read(db, "her", "confidence", now=T0)
+    slow.observe_event(db, "her", "initiate", now=T0)
+    after = slow.read(db, "her", "confidence", now=T0)
+    assert after == pytest.approx(before), "自己开口不该涨底气"
+    assert slow.read(db, "her", "cadence", now=T0) > slow.CFG["cadence"]["baseline"]
+
+
+def test_他回了才涨底气(db) -> None:
+    from gits.social import state as slow
+
+    before = slow.read(db, "her", "confidence", now=T0)
+    slow.observe_event(db, "her", "reply_fast", now=T0)
+    assert slow.read(db, "her", "confidence", now=T0) > before
+
+
+def test_能推底气的事件是一张表(db) -> None:
+    """散在 if 里的话，下次加事件就会漏掉这条纪律。"""
+    from gits.social.state import CONFIDENCE_EVENTS, EVENT_DELTAS
+
+    assert "initiate" not in CONFIDENCE_EVENTS
+    assert "reply_fast" in CONFIDENCE_EVENTS
+    for name, delta in EVENT_DELTAS.items():
+        if "confidence" in delta:
+            assert name in CONFIDENCE_EVENTS
+
+
+def test_沉默的负面仍然小于回应的正面(db) -> None:
+    """这条纪律不能因为改上面那条就丢了。"""
+    from gits.social.state import EVENT_DELTAS
+
+    fast = EVENT_DELTAS["reply_fast"]["confidence"]
+    silent = EVENT_DELTAS["no_reply"]["confidence"]
+    assert abs(silent) < fast / 3
