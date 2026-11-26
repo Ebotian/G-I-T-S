@@ -210,8 +210,18 @@ def test_没有候选时返回空(db) -> None:
 
 
 def test_共鸣绑在同一条候选上(db) -> None:
-    """以前共鸣是独立对人类最新消息算的，于是"最悬的是 A、最像的是 B"，
-    两个分数相加却没有此刻说 A 的依据。现在先抽一件，再看它像不像。"""
+    """共鸣必须是**抽到的那件事**的函数，而不是对人类最新消息独立算的。
+
+    以前是后者："最悬的是看病、最像的是咖啡"，两个分数相加却没有此刻
+    追问病情的依据。
+
+    这条测试按结构断言，不按数值——因为"抽到哪件"是随机的（不固定种子），
+    写死期望值会变成一半概率通过的假测试。**它一开始就是那个假测试**：
+    构造函数里 recall 根本召回不到东西（FTS 没建索引），共鸣恒为 0，
+    断言只在抽到某一件时才执行——固定种子把它盖住了。
+    """
+    from gits.memory.recall import recall
+
     _dangling(db, "看病")
     _dangling(db, "咖啡")
     with Writer(db).txn() as c:
@@ -222,9 +232,10 @@ def test_共鸣绑在同一条候选上(db) -> None:
                    0, 1, "world"))
     i, _p, best = unresolved.inputs(db, now=T0)
     assert best is not None
-    # 抽到咖啡时，共鸣才该是高的；抽到看病时不该被咖啡拉高
-    if unresolved.name_of(db, best.entity) == "咖啡":
-        assert i.resonance > 0, "抽到咖啡却没算出共鸣"
+    probe = unresolved.name_of(db, best.entity)
+    hits = recall(db, probe, actor="her", now_ms=T0, k=3) if probe else []
+    want = max((h.sim for h in hits), default=0.0)
+    assert i.resonance == pytest.approx(want), (probe, want, i.resonance)
 
 
 def test_回复落库前一定收成整句(db) -> None:
