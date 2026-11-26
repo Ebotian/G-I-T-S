@@ -81,7 +81,7 @@ def recent(db: DB, *, actor: str = "her", from_id: int | None = None,
     return tuple(out)
 
 
-def relation(db: DB, *, now: int) -> RelationSnapshot:
+def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
     """B 段。**一小时内逐字不变**——所以只能放"这个小时都成立"的东西。
 
     hubs 取最近一再出现的实体；它决定她"顺手会提谁"。现在只有计数，
@@ -93,10 +93,12 @@ def relation(db: DB, *, now: int) -> RelationSnapshot:
     hubs = tuple(str(r["content"]) for r in db.q(
         "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
+    from gits.affect import line as affect_line
+
     return RelationSnapshot(
         bucket=bucket(now),
         summary=f"认识第 {days} 天，记下 {n} 件事。" if n else "还没记下什么。",
-        hubs=hubs, phase="醒着")
+        hubs=hubs, phase="醒着", affect=affect_line(db, actor, now=now))
 
 
 def pending(db: DB, *, limit: int = 3) -> list[dict]:
@@ -120,7 +122,7 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
                      from_id=win["first_event_id"] if win else None,
                      until_id=event["id"])
     seed = persona or load_persona(db)
-    snap = relation(db, now=now)
+    snap = relation(db, now=now, actor=actor)
     hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)
     from gits.facts import lines as fact_lines

@@ -49,6 +49,9 @@ class RelationSnapshot:
     summary: str
     hubs: tuple[str, ...]
     phase: str
+    #: 情绪那一行（affect.distribution 渲染出来的）。空 = 不说。
+    #: **说分布，不说结论**："最近偏生气" 可以核对，"她在生气" 不行。
+    affect: str = ""
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,7 @@ def render_b(snap: RelationSnapshot) -> str:
         f"# 我们现在\n{snap.summary.strip()}\n"
         f"你最近在意：{hubs}\n"
         f"此刻的状态：{snap.phase}\n"
+        + (f"{snap.affect}\n" if snap.affect else "")
     )
 
 

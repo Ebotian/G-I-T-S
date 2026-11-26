@@ -26,12 +26,15 @@ PROMPT = """把这句话拆成结构化的事实。只输出 JSON，不要解释
 
 {"summary": "一句话说清这件事是什么，第三人称，30 字以内",
  "entities": [{"name": "具体名词，原话里的叫法", "kind": "person|topic|thing|place"}],
- "claims": [{"subject": "谁", "predicate": "做了什么/是什么", "object": "对象"}]}
+ "claims": [{"subject": "谁", "predicate": "做了什么/是什么", "object": "对象"}],
+ "affect": {"angle": "joy|trust|fear|surprise|sadness|disgust|anger|anticipation|none", "intensity": 1}}
 
 规则：
 - summary 写事实，不写感受，不写建议。原文说的是"开会开到吐"，就写"他今天开会很久"。
 - 只抽原话里真的出现过的。没有就留空数组，不要补。
 - 人称用"他"指说话的人。
+- affect 是**说这句话的人**此刻的情绪倾向，绝大多数消息是 none。
+  落不进这 8 个词就用 none，不要挑最近的（委屈、心酸、憋屈都该是 none）。
 
 原话：{text}"""
 
@@ -59,6 +62,15 @@ def parse(raw: str) -> dict:
         raise ValueError(f"缺 summary：{raw[:120]!r}")
     obj.setdefault("entities", [])
     obj.setdefault("claims", [])
+    aff = obj.get("affect")
+    if not isinstance(aff, dict) or aff.get("angle") in (None, "none", ""):
+        obj["affect"] = None
+    else:
+        try:
+            obj["affect"] = {"angle": str(aff.get("angle")),
+                              "intensity": int(aff.get("intensity", 2))}
+        except (TypeError, ValueError):
+            obj["affect"] = None
     return obj
 
 
@@ -80,6 +92,14 @@ def apply(db: DB, event: dict, payload: dict, *, ts: int | None = None) -> str:
     row["ts"] = ts or event["ts"]
     with Writer(db).txn() as c:
         return project.apply_payload(c, row, payload)
+
+
+def _speaker(event: dict) -> str:
+    """这条情绪是谁的。peer:xxx 的来源归到那个实例，其余归主个体。"""
+    source = str(event.get("source") or "")
+    if source.startswith("peer:"):
+        return source.split(":", 1)[1]
+    return "her"
 
 
 def done(db: DB, event_id: int) -> bool:
@@ -130,6 +150,14 @@ def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
         event_id=event["id"], usage_json=str(reply.usage),
         prompt_hash=None, ts=ts)
     nid = apply(db, event, payload, ts=ts)
+    # 情绪观测：单条噪声大，但聚合进 24 格分布之后就稳了（affect.py）。
+    # **观测来自事件，不是来自「她现在什么心情」**——后者没人能核对。
+    if payload.get("affect"):
+        from gits.affect import observe
+
+        observe(db, _speaker(event), angle=payload["affect"]["angle"],
+                intensity=payload["affect"]["intensity"],
+                ts=int(ts or event["ts"]))
     return Extracted(
         event_id=event["id"], summary=payload["summary"], node_id=nid,
         entities=len(payload.get("entities", [])),
