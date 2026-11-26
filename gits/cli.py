@@ -358,6 +358,27 @@ def cmd_world(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schema_manifest(args: argparse.Namespace) -> int:
+    """重新登记迁移文件的指纹。**改了老迁移之后才需要跑这个。**
+
+    迁移是只读的：已经应用过的那份不会重跑，改它就只是让新库和老库不一样。
+    新结构一律加新文件；真要动老文件，跑一次这个，并把原因写进提交说明。
+    """
+    import hashlib
+    from pathlib import Path as _P
+
+    from gits.core.db import SCHEMA_DIR
+
+    lines = []
+    for path in sorted(_P(SCHEMA_DIR).glob("[0-9]*_*.sql")):
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"{digest}  {path.name}")
+    out = _P(SCHEMA_DIR) / "MANIFEST.sha256"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"登记了 {len(lines)} 个迁移 -> {out}")
+    return 0
+
+
 def cmd_cache(args: argparse.Namespace) -> int:
     """缓存诊断：命中率 + **是哪一段在动**。
 
@@ -733,6 +754,9 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--monthly", type=float, default=200.0)
     q.add_argument("--balance", type=float, default=0.0)
     q.set_defaults(fn=cmd_quota)
+    sm = sub.add_parser("schema-manifest",
+                        help="重新登记迁移指纹（只该在改老迁移时用）")
+    sm.set_defaults(fn=cmd_schema_manifest)
     ca = sub.add_parser("cache", help="缓存诊断：命中率 + 哪一段在动")
     ca.set_defaults(fn=cmd_cache)
 
