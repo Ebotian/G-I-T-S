@@ -119,7 +119,9 @@ def freeze(db: DB, *, now: int, actor: str = "her") -> str:
     row = db.one("SELECT blob FROM brief_snapshot WHERE bucket=?", (bucket,))
     if row is not None:
         return str(row["blob"])
-    blob = render(build(db, now=bucket * 3_600_000, actor=actor))
+    # 用**第一次用到它的那一刻**算，不是整点算。
+    # 整点算的话，11:59 拿到的还是 11:00 的状态，"待了多久"会差一小时。
+    blob = render(build(db, now=now, actor=actor))
     if blob:
         with Writer(db).txn() as c:
             c.execute("INSERT INTO brief_snapshot(bucket, blob, created)"

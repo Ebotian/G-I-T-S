@@ -73,6 +73,17 @@ def test_同小时内逐字节相同(db) -> None:
     assert nxt != a, "换小时了却没换一份"
 
 
+def test_冻结用的是用的那一刻不是整点(db) -> None:
+    """整点算的话，11:59 拿到的还是 11:00 的状态——\"待了多久\"会差一整个小时。"""
+    _fill(db)
+    # 他在 T0-20 分钟到的；第一次用到背景块是 T0+100 分钟 -> 一共 120 分钟 -> 待了挺久
+    # 若按整点(T0)算，只有 20 分钟 -> 刚坐下，差一整个桶
+    with Writer(db).txn() as c:
+        c.execute("UPDATE place_state SET since=? WHERE actor='her'", (T0 - 20 * 60_000,))
+    blob = B.freeze(db, now=T0 + 100 * 60_000)
+    assert "待了挺久" in blob, blob
+
+
 def test_换小时就换一份(db) -> None:
     _fill(db)
     a = B.freeze(db, now=T0)
