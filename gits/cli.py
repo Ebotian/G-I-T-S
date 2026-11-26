@@ -143,7 +143,7 @@ def cmd_shell(args: argparse.Namespace) -> int:
 
     channels = []
     if args.weixin_state:
-        from .channels.weixin import Account
+        from gits.io.channels.weixin import Account
 
         acct = Account.load(args.weixin_state)
         channels.append(WeixinAdapter(acct,
@@ -198,7 +198,7 @@ def cmd_inbox(args: argparse.Namespace) -> int:
 
 def cmd_weixin(args: argparse.Namespace) -> int:
     """微信通道：登录、查看、发一条。"""
-    from .channels.weixin import Account, WeixinClient, WeixinChannel
+    from gits.io.channels.weixin import Account, WeixinClient, WeixinChannel
 
     state = Path(args.state)
     client = WeixinClient()
