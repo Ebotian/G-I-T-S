@@ -27,7 +27,10 @@ public class LocReceiver extends BroadcastReceiver {
         } catch (Exception ignored) {
         }
         if (loc == null) loc = lastKnown(context);
-        if (loc == null) return;
+        if (loc == null) {
+            android.util.Log.i("gitsloc", "没有定位，跳过");
+            return;
+        }
 
         long now = System.currentTimeMillis();
         long fix = loc.getTime() > 0 ? loc.getTime() : now;
@@ -44,8 +47,18 @@ public class LocReceiver extends BroadcastReceiver {
             o.put("elapsed_ms", age);
             o.put("cached", age > CACHED_AGE_MS);
             String body = o.toString();
+            android.util.Log.i("gitsloc", "上报 age=" + age + "ms " + loc.getProvider());
             if (body.getBytes("UTF-8").length > 500) return;
-            Uploader.submit(context, body);
+            // 广播接收器跑在主线程，网络 I/O 必须让出去。
+            final PendingResult pr = goAsync();
+            final Context ctx = context.getApplicationContext();
+            new Thread(() -> {
+                try {
+                    Uploader.submit(ctx, body);
+                } finally {
+                    pr.finish();
+                }
+            }).start();
         } catch (Exception ignored) {
         }
     }

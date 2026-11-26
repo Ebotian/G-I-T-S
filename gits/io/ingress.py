@@ -193,9 +193,45 @@ class Handler(BaseHTTPRequestHandler):
         self._no()
 
 
+class _Server(ThreadingHTTPServer):
+    """TLS 握手在 accept 时做，**失败要能看见**。
+
+    直接 wrap 监听 socket 的话，握手失败只会表现为"连接被关掉"，
+    客户端那头是 SSLHandshakeException，服务端一个字都没有——
+    两边都在猜。这里把每一处失败都写进日志。
+    """
+
+    ctx: object | None = None
+
+    def get_request(self):
+        sock, addr = super().get_request()
+        if self.ctx is None:
+            return sock, addr
+        try:
+            return self.ctx.wrap_socket(sock, server_side=True), addr  # type: ignore
+        except Exception as exc:
+            _log(f"TLS 握手失败 from {addr[0]}: {exc!r}")
+            try:
+                sock.close()
+            except OSError:
+                pass
+            raise
+
+    def handle_error(self, request, client_address) -> None:
+        # 握手失败是**预期内**的（有人在扫端口），不该打整段 traceback。
+        pass
+
+
+def _log(msg: str) -> None:
+    import sys
+
+    sys.stderr.write("[ingress] " + msg + "\n")
+    sys.stderr.flush()
+
+
 def serve(*, db_path: str, secret: str, port: int,
           cert: str | None = None, key: str | None = None) -> None:
-    srv = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    srv = _Server(("0.0.0.0", port), Handler)
     srv.state = {"db_path": db_path, "verifier": Verifier(secret)}  # type: ignore
     if cert and key:
         import ssl
@@ -203,5 +239,6 @@ def serve(*, db_path: str, secret: str, port: int,
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         ctx.load_cert_chain(cert, key)
-        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+        srv.ctx = ctx
+    _log(f"监听 :{port}  {'TLS' if srv.ctx else '明文'}  只认 POST /loc")
     srv.serve_forever()

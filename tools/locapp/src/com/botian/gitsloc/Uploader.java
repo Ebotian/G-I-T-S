@@ -139,9 +139,17 @@ final class Uploader {
                 return true;
             }
             Cfg.note(c, "HTTP " + code);
+            android.util.Log.w("gitsloc", "HTTP " + code);
             return false;
         } catch (Exception e) {
-            Cfg.note(c, e.getClass().getSimpleName());
+            // 诊断用：类名 + 消息 + 根因。原来只存类名，"SSLHandshakeException"
+            // 这一条什么也说明不了——是链的问题、时间的问题、还是被中间人拦了。
+            Throwable root = e;
+            while (root.getCause() != null) root = root.getCause();
+            String msg = e.getClass().getSimpleName() + ": " + e.getMessage()
+                    + " <- " + root.getClass().getSimpleName() + ": " + root.getMessage();
+            Cfg.note(c, msg.length() > 300 ? msg.substring(0, 300) : msg);
+            android.util.Log.w("gitsloc", msg);
             return false;
         } finally {
             if (conn != null) conn.disconnect();
