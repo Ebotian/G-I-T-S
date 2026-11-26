@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gits.db import DB
-from gits.fsrs import DAY, retrievability
-from gits.scope import visible
-from gits.search import Hit, index_node, search
+from gits.core.db import DB
+from gits.memory.fsrs import DAY, retrievability
+from gits.core.scope import visible
+from gits.memory.search import Hit, index_node, search
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
     # 注意力权重：她先留意什么。**不是规则，是偏好**——只调排序，不删候选。
     # 漂移改的就是这张表（attention.py），所以它必须真的影响检索，
     # 否则"漂移"是装饰。
-    from gits.attention import weights
+    from gits.social.attention import weights
 
     topic_w = weights(db, actor)
     if topic_w and hits:

@@ -14,13 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from gits import ctxwin
-from gits.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
+from gits.speech import ctxwin
+from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
                           bucket, messages)
-from gits.db import DB, Writer, now_ms
-from gits.llm import Reply, chat, cost_cny
-from gits.recall import lines, recall
-from gits.scope import visible
+from gits.core.db import DB, Writer, now_ms
+from gits.speech.llm import Reply, chat, cost_cny
+from gits.memory.recall import lines, recall
+from gits.core.scope import visible
 
 DEFAULT_PERSONA = "我不太会哄人。但我记得住你说过的东西。"
 
@@ -48,7 +48,7 @@ def load_persona(db: DB | None = None) -> PersonaSeed:
     """
     if db is None:
         raise NoPersona("load_persona 需要 db：人格现在存在事件里，不是文件里")
-    from gits.persona import current
+    from gits.memory.persona import current
 
     cur = current(db)
     if cur is None or not cur["narrative"]:
@@ -93,7 +93,7 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
     hubs = tuple(str(r["content"]) for r in db.q(
         "SELECT c.content FROM nodes n JOIN node_content c ON c.node_id=n.id"
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
-    from gits.affect import line as affect_line
+    from gits.social.affect import line as affect_line
 
     return RelationSnapshot(
         bucket=bucket(now),
@@ -125,7 +125,7 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     snap = relation(db, now=now, actor=actor)
     hits = recall(db, text, actor=actor, context=" ".join(t for _w, t in history),
                   now_ms=now, k=5)
-    from gits.facts import lines as fact_lines
+    from gits.speech.facts import lines as fact_lines
 
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
                       due=fact_lines(db, now))

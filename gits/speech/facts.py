@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import datetime as _dt
 
-from gits.db import DB, Writer, now_ms
-from gits.scope import self_of
+from gits.core.db import DB, Writer, now_ms
+from gits.core.scope import self_of
 
 #: 和 rhythm.py 同一个时区基准
 TZ_OFFSET_HOURS = 8
@@ -106,7 +106,7 @@ def add(db: DB, *, subject: str, key: str, label: str, month: int, day: int,
 
     改生日 = 再写一条同 (subject, key) 的，旧的自动被顶掉。不删、不清。
     """
-    from gits.project import fact_id
+    from gits.core.project import fact_id
 
     now = now or now_ms()
     if repeat not in ("yearly", "once"):
@@ -121,7 +121,7 @@ def add(db: DB, *, subject: str, key: str, label: str, month: int, day: int,
         source="fact", kind="fact", ext_id=fact_id(subject, key, now),
         ts=now, recv_ts=now, scope=self_of(subject),
         payload=json.dumps(payload, ensure_ascii=False).encode())
-    from gits import project
+    from gits.core import project
 
     row = {"kind": "fact", "source": "fact",
            "ext_id": fact_id(subject, key, now), "ts": now,

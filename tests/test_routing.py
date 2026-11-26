@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer
-from gits.delivery import claim, dispatch
-from gits.shell import FileChannel
+from gits.core.db import DB, Writer
+from gits.io.delivery import claim, dispatch
+from gits.io.shell import FileChannel
 
 T0 = 1_800_000_000_000
 

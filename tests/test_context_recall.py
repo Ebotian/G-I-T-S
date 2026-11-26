@@ -10,7 +10,7 @@ import sqlite3
 
 import pytest
 
-from gits.search import index_node, search
+from gits.memory.search import index_node, search
 
 
 def _c() -> sqlite3.Connection:

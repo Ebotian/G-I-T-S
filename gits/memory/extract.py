@@ -17,10 +17,10 @@ import json
 import re
 from dataclasses import dataclass
 
-from gits.db import DB, Writer, now_ms
-from gits.llm import Reply, chat, cost_cny
-from gits import project
-from gits.project import node_id_for
+from gits.core.db import DB, Writer, now_ms
+from gits.speech.llm import Reply, chat, cost_cny
+from gits.core import project
+from gits.core.project import node_id_for
 
 PROMPT = """把这句话拆成结构化的事实。只输出 JSON，不要解释。
 
@@ -153,7 +153,7 @@ def extract(db: DB, event: dict, *, model: str = "deepseek-flash",
     # 情绪观测：单条噪声大，但聚合进 24 格分布之后就稳了（affect.py）。
     # **观测来自事件，不是来自「她现在什么心情」**——后者没人能核对。
     if payload.get("affect"):
-        from gits.affect import observe
+        from gits.social.affect import observe
 
         observe(db, _speaker(event), angle=payload["affect"]["angle"],
                 intensity=payload["affect"]["intensity"],

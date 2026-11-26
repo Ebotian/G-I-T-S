@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer
-from gits.events import export_logset, import_logset
-from gits.project import dump_projection, restore
-from gits.rhythm import WeeklyKDE, bin_of
+from gits.core.db import DB, Writer
+from gits.core.events import export_logset, import_logset
+from gits.core.project import dump_projection, restore
+from gits.time.rhythm import WeeklyKDE, bin_of
 from synth.build import build
 from synth.schedule import AT_DESK, DAY, SCENARIOS, START
 from synth.score import score

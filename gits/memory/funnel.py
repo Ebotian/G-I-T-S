@@ -17,10 +17,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from gits.db import DB, Writer, now_ms
-from gits.fsrs import DAY, retrievability
-from gits.llm import Reply, chat, cost_cny
-from gits.project import entity_id, node_id_for
+from gits.core.db import DB, Writer, now_ms
+from gits.memory.fsrs import DAY, retrievability
+from gits.speech.llm import Reply, chat, cost_cny
+from gits.core.project import entity_id, node_id_for
 
 #: 最低间隔：同一个下午的三十条不算三十次
 MIN_GAP_DAYS = 0.5
@@ -115,7 +115,7 @@ def cluster_of(db: DB, entity: str) -> Cluster:
     """
     # **先把别名展开**：开会 / 会议 / 那个会 必须算一个簇，
     # 否则复现次数被拆成三份，永远到不了阈值，漏斗就悄悄废了。
-    from gits.semantic import family
+    from gits.memory.semantic import family
 
     eid = entity_id(entity)
     fam = sorted(family(db, eid))
@@ -159,8 +159,8 @@ class Compacted:
 
 def _record_aliases(db: DB, pairs, *, entity: str, now: int) -> int:
     """把 same_as 写进别名表。**拿不准的不合**——空数组是常见答案。"""
-    from gits.project import entity_id
-    from gits.semantic import merge
+    from gits.core.project import entity_id
+    from gits.memory.semantic import merge
 
     if not isinstance(pairs, list):
         return 0
@@ -286,14 +286,14 @@ def compact(db: DB, entity: str, *, now: int | None = None,
         c.execute("INSERT INTO node_content(node_id, content, created_ts)"
                   " VALUES(?,?,?)", (nid, summary, now))
         # 摘要本身要立刻可检索——它是漏斗往下走的那一环，不是纪念品。
-        from gits.search import index_node
+        from gits.memory.search import index_node
 
         index_node(c, nid, summary)
         # 吸收：进不了检索，但查得到是从哪几条抽象出来的（不可检索 ≠ 不可审计）
         for child in press:
             c.execute("UPDATE node_content SET absorbed_into=? WHERE node_id=?"
                       " AND absorbed_into IS NULL", (nid, child))
-            from gits.graph import add_edge
+            from gits.memory.graph import add_edge
 
             add_edge(c, src=nid, dst=entity_id(entity), kind="mentions",
                      ts=now, w=1.0)
@@ -311,7 +311,7 @@ def compact(db: DB, entity: str, *, now: int | None = None,
 
 
 def alive_count(db: DB, entity: str, *, now: int) -> int:
-    from gits.fsrs import DAY, retrievability
+    from gits.memory.fsrs import DAY, retrievability
 
     n = 0
     for nid in cluster_of(db, entity).node_ids:

@@ -19,9 +19,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from gits import ctxwin
-from gits.db import DB, Writer, now_ms
-from gits.llm import Reply, chat, cost_cny
+from gits.speech import ctxwin
+from gits.core.db import DB, Writer, now_ms
+from gits.speech.llm import Reply, chat, cost_cny
 
 PROMPT = """下面是刚刚聊过的一段。把它整理成她的记忆，只输出 JSON。
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 
-from gits.db import DB, Writer, now_ms
+from gits.core.db import DB, Writer, now_ms
 
 #: 共现推断的默认门槛。只用来产生候选，不直接合并。
 PROXIMITY = 0.5
@@ -61,7 +61,7 @@ def merge(db: DB, alias: str, canonical: str, *, source: str = "model",
           certainty: float = 1.0, now: int | None = None,
           because: list[int] | None = None) -> int:
     """记一条别名。**走事件 → 投影**，和其他东西同一条重放路径。"""
-    from gits import project
+    from gits.core import project
 
     now = now or now_ms()
     if alias == canonical or resolve(db, canonical) == alias:

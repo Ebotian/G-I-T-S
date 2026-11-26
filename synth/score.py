@@ -13,9 +13,9 @@ from typing import Iterable
 
 import numpy as np
 
-from gits.db import DB
-from gits.gate import GateInputs, evaluate
-from gits.rhythm import ObsWindow, WeeklyKDE, periodicity_report, s_user
+from gits.core.db import DB
+from gits.speech.gate import GateInputs, evaluate
+from gits.time.rhythm import ObsWindow, WeeklyKDE, periodicity_report, s_user
 from synth.schedule import ASLEEP, AT_DESK, OFFLINE
 
 DAY = 86_400_000

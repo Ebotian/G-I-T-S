@@ -10,8 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from gits import facts, project
-from gits.db import DB, Writer
+from gits.speech import facts
+from gits.core import project
+from gits.core.db import DB, Writer
 
 DAY = 86_400_000
 

@@ -10,7 +10,7 @@ import random
 
 import pytest
 
-from gits.gate import (
+from gits.speech.gate import (
     RECIPROCITY_FALLBACK, SEND_DECAY, GateInputs, elicitation_ratio, evaluate,
     open_value, should_swallow,
 )

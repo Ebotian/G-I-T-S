@@ -21,9 +21,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from gits.db import DB
-from gits.gate import GateInputs
-from gits.graph import effective
+from gits.core.db import DB
+from gits.speech.gate import GateInputs
+from gits.memory.graph import effective
 
 #: 知道这么多条之后就"没什么可问的了"
 ENOUGH = 3.0

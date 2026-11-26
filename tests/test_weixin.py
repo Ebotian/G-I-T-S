@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from gits.channels.weixin import Account, WeixinChannel, WeixinClient, _uin, text_of
+from gits.io.channels.weixin import Account, WeixinChannel, WeixinClient, _uin, text_of
 
 
 # ── 消息摊平 ────────────────────────────────────────────────

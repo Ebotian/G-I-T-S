@@ -16,11 +16,11 @@ import re
 import numpy as np
 import pytest
 
-from gits.context import (
+from gits.speech.context import (
     PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket,
     estimate_tokens, render_a, render_b, render_c, status_line,
 )
-from gits.rhythm import (
+from gits.time.rhythm import (
     BINS_PER_WEEK, ObsWindow, WeeklyKDE, bin_of, bocpd, periodicity_report,
     s_user,
 )

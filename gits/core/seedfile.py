@@ -195,8 +195,10 @@ def inside_repo(path: Path, repo: Path = Path("/srv/gits")) -> bool:
 
 def apply(db, b: Bundle, *, now: int | None = None) -> dict[str, int]:
     """写进事件。幂等：ext_id 里带整份内容的哈希，重导同一份不会重复。"""
-    from gits import actors, attention, facts
-    from gits.db import Writer, now_ms
+    from gits.social import actors
+    from gits.social import attention
+    from gits.speech import facts
+    from gits.core.db import Writer, now_ms
 
     now = now or now_ms()
     counts = {"actors": 0, "persona": 0, "topics": 0, "facts": 0}
@@ -271,7 +273,7 @@ def _parse_facts(raw, actor_ids: set[str]) -> list[FactSeed]:
             raise Bad(f"{where}.month 必须是 1..12")
         if not isinstance(day, int) or not 1 <= day <= 31:
             raise Bad(f"{where}.day 必须是 1..31")
-        from gits.facts import _this_year_date
+        from gits.speech.facts import _this_year_date
 
         try:
             _this_year_date(2000, month, day)

@@ -21,12 +21,12 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer, now_ms
-from gits.events import export_logset, import_logset, iter_stream
-from gits.gate import GateInputs
-from gits.project import dump_projection, restore
+from gits.core.db import DB, Writer, now_ms
+from gits.core.events import export_logset, import_logset, iter_stream
+from gits.speech.gate import GateInputs
+from gits.core.project import dump_projection, restore
 from gits.sched import Health, Node, Task, eligible
-from gits.sync import plan
+from gits.core.sync import plan
 
 REPO = Path(__file__).resolve().parents[1]
 T0 = 1_800_000_000_000
@@ -85,7 +85,7 @@ def test_say_崩溃后重试能补上() -> None:
     code = textwrap.dedent(f"""
         import os, sys
         sys.path.insert(0, {str(REPO)!r})
-        from gits.db import DB, Writer, now_ms
+        from gits.core.db import DB, Writer, now_ms
         db = DB(sys.argv[1]); w = Writer(db)
         # 只写事件、不写结果，然后崩
         w.append_event(source="wechat", kind="msg_in", ext_id="half",
@@ -191,7 +191,7 @@ def test_删除流永不被跳过() -> None:
 # ── 5. 断线不能被学成低谷 ──────────────────────────────────
 def test_可观测窗口让断线不再是低谷() -> None:
     import numpy as np
-    from gits.presence import fit
+    from gits.time.presence import fit
 
     # 断线的占比越大，偏差越明显——这是"把没数据当零"的直接后果。
     # 26/60 天不可观测时，naive 的基线率会被压掉三成以上。

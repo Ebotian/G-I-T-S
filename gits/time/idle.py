@@ -18,8 +18,8 @@ from typing import Sequence
 
 import numpy as np
 
-from gits.db import DB
-from gits.rhythm import WeeklyKDE, bin_of, bocpd
+from gits.core.db import DB
+from gits.time.rhythm import WeeklyKDE, bin_of, bocpd
 
 MINUTE = 60_000
 HOUR = 60 * MINUTE

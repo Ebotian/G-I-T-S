@@ -17,9 +17,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gits.db import DB
-from gits.idle import Idle, estimate, gaps_of
-from gits.rhythm import WeeklyKDE, bin_of
+from gits.core.db import DB
+from gits.time.idle import Idle, estimate, gaps_of
+from gits.time.rhythm import WeeklyKDE, bin_of
 
 #: 密度低于全周的这个分位才算"安静时段"
 QUIET_QUANTILE = 0.25

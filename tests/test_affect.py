@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from gits import affect
-from gits.db import DB
+from gits.social import affect
+from gits.core.db import DB
 
 T0 = 1_800_000_000_000
 HOUR = 3_600_000

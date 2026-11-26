@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gits.db import DB, Writer, now_ms
-from gits.idle import Idle
+from gits.core.db import DB, Writer, now_ms
+from gits.time import Idle
 
 #: 每轮 prompt 的预算。**按最坏情况（全未命中）可承受来定，不是按省 token 定。**
 #: 12K × 1 元/M × 150 轮 = 1.8 元/天 是天花板；全命中时只花 0.036 元。

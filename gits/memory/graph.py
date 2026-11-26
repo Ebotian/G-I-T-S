@@ -21,7 +21,7 @@ from __future__ import annotations
 import math
 import sqlite3
 
-from gits.db import DB
+from gits.core.db import DB
 
 DAY = 86_400_000
 #: 遗忘时间常数。和 FSRS 一个量级——它们描述的是同一件事的不同侧面。

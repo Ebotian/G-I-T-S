@@ -9,8 +9,8 @@
 
 from __future__ import annotations
 
-from gits.db import DB, Writer, now_ms
-from gits.scope import self_of
+from gits.core.db import DB, Writer, now_ms
+from gits.core.scope import self_of
 
 #: 属于「内容」的事件类型。机制不在这里面。
 CONTENT_KINDS = ("seed", "persona", "drift", "attention", "inner",
@@ -49,7 +49,7 @@ def wipe(db: DB, *, actor: str = "her", now: int | None = None,
                       " (SELECT id FROM nodes WHERE scope=?)", (scope,))
             c.execute("DELETE FROM nodes WHERE scope=?", (scope,))
             # FTS 是可选索引（ensure_fts 才建），别假设它存在
-            from gits.search import ensure_fts
+            from gits.memory.search import ensure_fts
 
             ensure_fts(c)
             c.execute("DELETE FROM node_fts WHERE node_id NOT IN"

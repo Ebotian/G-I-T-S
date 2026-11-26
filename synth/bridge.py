@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gits.db import DB, Writer
-from gits.fsrs import Memory, Rating
-from gits.recall import reindex
+from gits.core.db import DB, Writer
+from gits.memory.fsrs import Memory, Rating
+from gits.memory.recall import reindex
 from synth.facts import DAY, Facts
 
 

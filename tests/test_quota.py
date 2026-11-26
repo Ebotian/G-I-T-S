@@ -14,8 +14,8 @@ import dataclasses
 
 import pytest
 
-from gits.context import TurnContext, assemble, PersonaSeed, RelationSnapshot, estimate_tokens
-from gits.quota import (
+from gits.speech.context import TurnContext, assemble, PersonaSeed, RelationSnapshot, estimate_tokens
+from gits.io.quota import (
     KINDS, UNIT_PRICE, Account, Activity, Budget, allowance, allowances, bar,
     day_cap, new_week_account,
 )

@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from gits import extract as E
-from gits import project
-from gits.db import DB, Writer
-from gits.llm import Reply
+from gits.memory import extract as E
+from gits.core import project
+from gits.core.db import DB, Writer
+from gits.speech.llm import Reply
 
 T0 = 1_800_000_000_000
 

@@ -27,10 +27,10 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from gits.db import DB, Writer, now_ms
-from gits.fsrs import DAY, retrievability
-from gits.llm import Reply, chat, cost_cny
-from gits.scope import self_of
+from gits.core.db import DB, Writer, now_ms
+from gits.memory.fsrs import DAY, retrievability
+from gits.speech.llm import Reply, chat, cost_cny
+from gits.core.scope import self_of
 
 #: A 段最多放几条自我域节点。**这就是漏斗底部的容量**——
 #: 上下文有限，我们都放进去了模型就没地方看别的了。

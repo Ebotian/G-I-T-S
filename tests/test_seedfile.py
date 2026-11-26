@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from gits import attention, persona, seedfile
-from gits.db import DB
+from gits.social import attention
+from gits.memory import persona
+from gits.core import seedfile
+from gits.core.db import DB
 
 T0 = 1_800_000_000_000
 
@@ -190,7 +192,7 @@ def test_投影没跟上要提示(db) -> None:
 
 
 def test_重放之后就不提示了(db) -> None:
-    from gits import project
+    from gits.core import project
 
     seedfile.apply(db, seedfile.parse(_doc()), now=T0)
     project.restore(db)
@@ -198,7 +200,7 @@ def test_重放之后就不提示了(db) -> None:
 
 
 def test_删掉的内容不算缺口(db) -> None:
-    from gits import wipe
+    from gits.core import wipe
 
     seedfile.apply(db, seedfile.parse(_doc()), now=T0)
     wipe.wipe(db, now=T0)

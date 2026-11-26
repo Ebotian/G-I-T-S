@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import math
 
-from gits.db import DB, Writer, now_ms
+from gits.core.db import DB, Writer, now_ms
 
 #: 每日基础漂移幅度（相对初始权重的比例）
 BASE_RATE = 0.02
@@ -167,7 +167,7 @@ def _mentions(db: DB, *, now: int,
     早先是 count(*) 数行数，完全不管 edges.w：10 次深谈和 10 次顺嘴一提
     权重一样。现在按带遗忘的强度求和（graph.py）。
     """
-    from gits.graph import effective
+    from gits.memory.graph import effective
 
     since = now - window_days * 86_400_000
     rows = db.q(

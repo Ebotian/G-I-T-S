@@ -11,7 +11,7 @@ import sqlite3
 
 import pytest
 
-from gits.search import (
+from gits.memory.search import (
     Weights, bm25_to_sim, combine, index_node, search, tokenize,
 )
 

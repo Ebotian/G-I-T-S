@@ -14,8 +14,8 @@ import sqlite3
 import statistics as st
 from dataclasses import dataclass
 
-from gits.fsrs import Memory, Rating
-from gits.search import index_node, search
+from gits.memory.fsrs import Memory, Rating
+from gits.memory.search import index_node, search
 from synth.facts import DAY, Facts, generate
 
 

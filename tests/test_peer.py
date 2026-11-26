@@ -15,10 +15,12 @@ from pathlib import Path
 
 import pytest
 
-from gits import actors, attention, peer
-from gits.db import DB, Writer
-from gits.respond import recent
-from gits.scope import self_of
+from gits.social import actors
+from gits.social import attention
+from gits.social import peer
+from gits.core.db import DB, Writer
+from gits.speech.respond import recent
+from gits.core.scope import self_of
 
 T0 = 1_800_000_000_000
 HOUR = 3_600_000
@@ -190,8 +192,8 @@ def test_漂移本身是事件且只在私有域(db) -> None:
 
 
 def test_注意力权重影响检索排序(db) -> None:
-    from gits.attention import seed as seed_w
-    from gits.recall import recall, reindex
+    from gits.social.attention import seed as seed_w
+    from gits.memory.recall import recall, reindex
 
     for nid, text in (("n:work", "开会开到很晚"), ("n:coffee", "喝了咖啡")):
         with Writer(db).txn() as c:
@@ -221,14 +223,14 @@ def test_漂移只漂非主个体(db, monkeypatch) -> None:
 
 
 def test_没有数据就不施压(db) -> None:
-    from gits import peer as P
+    from gits.social import peer as P
 
     assert P.overlap(db, "peer1", "peer2") is None
     assert attention.overlap_pressure(None) == 0.0
 
 
 def test_重合率越高施压越大(db) -> None:
-    from gits import peer as P
+    from gits.social import peer as P
 
     for i in range(3):
         P.say(db, "peer1", "peer2", "我最近总在想同一件事，反反复复地说它", now=T0 + i)
@@ -243,7 +245,7 @@ def test_重合率越高施压越大(db) -> None:
 
 def _mention(db: DB, actor: str, topic: str, ts: int, n: int = 1) -> None:
     """造一条"提到了这个话题"的事实，用来喂观测。"""
-    from gits.project import entity_id
+    from gits.core.project import entity_id
 
     nid = f"n:test-{topic}-{ts}"
     eid = entity_id(topic)

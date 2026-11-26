@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from gits.decay import (
+from gits.time.decay import (
     BASELINES, MODELS, S0, State, build, retrievability,
 )
 from synth.eval_decay import evaluate

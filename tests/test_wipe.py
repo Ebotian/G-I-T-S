@@ -10,8 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from gits import persona, project, wipe
-from gits.db import DB, Writer
+from gits.memory import persona
+from gits.core import project
+from gits.core import wipe
+from gits.core.db import DB, Writer
 
 T0 = 1_800_000_000_000
 
@@ -59,7 +61,7 @@ def test_删除本身是事实(db) -> None:
 
 
 def test_清空不动别人的内容(db) -> None:
-    from gits.scope import self_of
+    from gits.core.scope import self_of
 
     persona.seed(db, "她的", now=T0)
     with Writer(db).txn() as c:
@@ -73,7 +75,7 @@ def test_清空不动别人的内容(db) -> None:
 
 
 def test_清空也清注意力权重(db) -> None:
-    from gits import attention
+    from gits.social import attention
 
     attention.seed(db, "her", {"开会": 1.2})
     assert attention.weights(db, "her") == {"开会": 1.2}
@@ -85,7 +87,7 @@ def test_清空也清注意力权重(db) -> None:
 
 def test_清空的返回值对得上状态(db) -> None:
     persona.seed(db, "一段", now=T0)
-    from gits import attention
+    from gits.social import attention
 
     attention.seed(db, "her", {"a": 1.0})
     got = wipe.wipe(db, now=T0)

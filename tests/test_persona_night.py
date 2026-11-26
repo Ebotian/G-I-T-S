@@ -12,12 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from gits import night as N
-from gits import persona, project
-from gits.db import DB, Writer
-from gits.llm import Reply
-from gits.recall import recall, reindex
-from gits.scope import self_of, visible
+from gits.time import night as N
+from gits.memory import persona
+from gits.core import project
+from gits.core.db import DB, Writer
+from gits.speech.llm import Reply
+from gits.memory.recall import recall, reindex
+from gits.core.scope import self_of, visible
 
 T0 = 1_800_000_000_000
 MIN = 60_000
@@ -70,7 +71,7 @@ def test_事件也分可见域(db) -> None:
     Writer(db).append_event(source="shell", kind="msg_in", ext_id="m2",
                             ts=T0, recv_ts=T0, payload="别人的".encode(),
                             scope=self_of("peer1"))
-    from gits.respond import recent
+    from gits.speech.respond import recent
 
     assert [t for _w, t in recent(db, actor="her")] == ["她的"]
 
@@ -116,7 +117,7 @@ def test_样本不够就说不知道(db) -> None:
 
 def _self_node(db: DB, nid: str, text: str, *, ts: int = T0, s: float = 30.0,
                depth: int = 0, actor: str = "her") -> None:
-    from gits.scope import self_of
+    from gits.core.scope import self_of
 
     with Writer(db).txn() as c:
         c.execute("INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch,"
@@ -147,7 +148,7 @@ def test_种子是一条普通事件(db) -> None:
 
 
 def test_没有自我描述时不说话(db) -> None:
-    from gits.respond import NoPersona, load_persona
+    from gits.speech.respond import NoPersona, load_persona
 
     with pytest.raises(NoPersona, match="种子"):
         load_persona(db)

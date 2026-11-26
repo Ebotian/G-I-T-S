@@ -23,8 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from gits.db import DB, Writer, now_ms
-from gits.delivery import Dispatch, dispatch
+from gits.core.db import DB, Writer, now_ms
+from gits.io.delivery import Dispatch, dispatch
 from gits.ghost import sd_notify
 
 
@@ -238,7 +238,7 @@ class WeixinAdapter:
     names = frozenset({"weixin"})
 
     def __init__(self, account, *, cursor_path=None) -> None:
-        from gits.channels.weixin import WeixinChannel
+        from gits.io.channels.weixin import WeixinChannel
 
         self.inner = WeixinChannel(account, cursor_path=cursor_path)
 

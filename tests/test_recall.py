@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from gits.context import PersonaSeed, RelationSnapshot, TurnContext, assemble
-from gits.recall import lines, recall, reindex
+from gits.speech.context import PersonaSeed, RelationSnapshot, TurnContext, assemble
+from gits.memory.recall import lines, recall, reindex
 from synth.bridge import load
 from synth.eval_e2e import compare
 from synth.facts import generate

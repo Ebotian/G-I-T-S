@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from gits import replica
-from gits.db import DB, Writer
-from gits.delivery import dispatch
-from gits.respond import recent
-from gits.shell import Shell
+from gits.core import replica
+from gits.core.db import DB, Writer
+from gits.io.delivery import dispatch
+from gits.speech.respond import recent
+from gits.io.shell import Shell
 
 T0 = 1_800_000_000_000
 
@@ -82,21 +82,21 @@ def _msg(db, text, ext, actor, token) -> int:
 
 
 def test_回复发给触发它的那个人(db) -> None:
-    from gits.respond import respond
+    from gits.speech.respond import respond
 
     class Stub:
         pass
 
-    from gits.persona import seed
+    from gits.memory.persona import seed
     seed(db, "我不太会哄人。", now=T0)
     _msg(db, "我是 A", "m1", "uA", "tokA")
     ev_b = _msg(db, "我是 B", "m2", "uB", "tokB")
 
-    import gits.respond as R
+    import gits.speech.respond as R
 
     orig = R.chat
     try:
-        R.chat = lambda *a, **k: __import__("gits.llm", fromlist=["Reply"]).Reply(
+        R.chat = lambda *a, **k: __import__("gits.speech.llm", fromlist=["Reply"]).Reply(
             text="好", model="stub", usage={"prompt_tokens": 100}, latency_ms=1)
         turn = respond(db, dict(db.one("SELECT * FROM events WHERE id=?", (ev_b,))))
     finally:

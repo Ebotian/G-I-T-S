@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gits.db import DB, LOG_STREAMS
-from gits.events import export_logset, import_logset
-from gits.project import dump_projection, restore
+from gits.core.db import DB, LOG_STREAMS
+from gits.core.events import export_logset, import_logset
+from gits.core.project import dump_projection, restore
 
 #: 拉取顺序：**事件必须最先**。
 #:
@@ -127,7 +127,7 @@ def _pk(stream: str) -> str:
 
 
 def _rows_after(db: DB, stream: str, after: int, limit: int) -> list[dict]:
-    from gits.events import iter_stream
+    from gits.core.events import iter_stream
     out = []
     for row in iter_stream(db, stream, after):
         out.append(row)
@@ -137,7 +137,7 @@ def _rows_after(db: DB, stream: str, after: int, limit: int) -> list[dict]:
 
 
 def _event_keys(db: DB) -> set[str]:
-    from gits.events import event_key
+    from gits.core.events import event_key
 
     return {event_key(r["source"], r["ext_id"])
             for r in db.conn.execute("SELECT source, ext_id FROM events")}

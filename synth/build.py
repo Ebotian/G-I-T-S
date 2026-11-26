@@ -16,7 +16,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-from gits.db import DB, Writer
+from gits.core.db import DB, Writer
 from synth.dialogue import THOUGHTS, fill_messages
 from synth.schedule import AT_DESK, DAY, OFFLINE, Scenario, generate
 

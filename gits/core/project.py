@@ -136,7 +136,7 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
     def link(a: str, b: str, w: float, edge_kind: str) -> None:
         # 带遗忘的计数：旧值先按时间衰减，再加这次（见 graph.py）。
         # 纯 w = w + 1 会让「三年前」和「昨天」一样重。
-        from gits.graph import add_edge
+        from gits.memory.graph import add_edge
 
         add_edge(conn, src=a, dst=b, kind=edge_kind, ts=ts, w=w)
 

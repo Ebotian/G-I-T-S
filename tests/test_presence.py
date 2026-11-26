@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gits.presence import DEFAULT_PERIODS, PoissonHarmonic, fit, period_p_values
+from gits.time.presence import DEFAULT_PERIODS, PoissonHarmonic, fit, period_p_values
 from synth.schedule import generate
 
 REPO = Path(__file__).resolve().parents[1]
@@ -40,7 +40,7 @@ def _probe(sc, fn):
 def test_ghost_不导入_statsmodels() -> None:
     """ghost 只读系数。一旦有人把拟合逻辑塞进 import 路径，内存预算就崩了。"""
     code = (
-        "import sys; sys.path.insert(0, %r); import gits.presence; "
+        "import sys; sys.path.insert(0, %r); import gits.time.presence; "
         "print('statsmodels' in sys.modules)" % str(REPO)
     )
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)

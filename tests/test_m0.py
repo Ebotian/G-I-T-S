@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer, now_ms
-from gits.events import export_logset, import_logset
-from gits.project import MissingModelResult, dump_projection, node_id_for, restore, trace
+from gits.core.db import DB, Writer, now_ms
+from gits.core.events import export_logset, import_logset
+from gits.core.project import MissingModelResult, dump_projection, node_id_for, restore, trace
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -56,7 +56,7 @@ def test_ack_means_durable(tmp_path: Path) -> None:
         f"""
         import os, sys
         sys.path.insert(0, {str(REPO)!r})
-        from gits.db import DB, Writer, now_ms
+        from gits.core.db import DB, Writer, now_ms
         db = DB({str(dbp)!r})
         w = Writer(db)
         ev_id, created = w.append_event(
@@ -84,7 +84,7 @@ def test_duplicate_submission_is_idempotent(tmp_path: Path) -> None:
         f"""
         import os, sys
         sys.path.insert(0, {str(REPO)!r})
-        from gits.db import DB, Writer, now_ms
+        from gits.core.db import DB, Writer, now_ms
         db = DB({str(dbp)!r}); w = Writer(db)
         w.append_event(source="wechat", kind="msg_in", ext_id="dup-1",
                        ts=now_ms(), recv_ts=now_ms(), payload=b"x")

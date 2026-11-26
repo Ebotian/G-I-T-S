@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from gits import funnel
-from gits.db import DB, Writer
-from gits.llm import Reply
-from gits.recall import recall
+from gits.memory import funnel
+from gits.core.db import DB, Writer
+from gits.speech.llm import Reply
+from gits.memory.recall import recall
 
 T0 = 1_800_000_000_000
 DAY = 86_400_000
@@ -31,7 +31,7 @@ def db(tmp_path: Path):
 
 def _episode(db: DB, nid: str, ts: int, text: str, entity: str,
              s: float = 3.0) -> None:
-    from gits.project import entity_id
+    from gits.core.project import entity_id
 
     with Writer(db).txn() as c:
         c.execute("INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
@@ -142,7 +142,7 @@ def test_没有复现就不压(db, monkeypatch) -> None:
 
 
 def test_压出来的东西能重放(db, monkeypatch) -> None:
-    from gits import project
+    from gits.core import project
 
     _many(db)
     _stub(monkeypatch, {"summary": "他对那个 PR 的取舍很在意。", "why": "x"})

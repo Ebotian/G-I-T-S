@@ -12,9 +12,11 @@ from pathlib import Path
 
 import pytest
 
-from gits import funnel, project, semantic
-from gits.db import DB, Writer
-from gits.project import entity_id
+from gits.memory import funnel
+from gits.core import project
+from gits.memory import semantic
+from gits.core.db import DB, Writer
+from gits.core.project import entity_id
 
 T0 = 1_800_000_000_000
 DAY = 86_400_000
@@ -41,7 +43,7 @@ def _episode(db: DB, nid: str, ts: int, entities: list[str]) -> None:
                       (eid, "entity", ts, "world"))
             c.execute("INSERT INTO node_content(node_id, content, created_ts)"
                       " VALUES(?,?,?)", (eid, name, ts))
-            from gits.graph import add_edge
+            from gits.memory.graph import add_edge
 
             add_edge(c, src=nid, dst=eid, kind="mentions", ts=ts, w=1.0)
 

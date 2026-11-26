@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer, now_ms
+from gits.core.db import DB, Writer, now_ms
 from gits.ghost import FileTransport, Ghost, NullTransport, serve, sd_notify
 
 T0 = 1_800_000_000_000

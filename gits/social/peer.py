@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-from gits import actors
-from gits.db import DB, Writer, now_ms
-from gits.scope import self_of
+from gits.social import actors
+from gits.core.db import DB, Writer, now_ms
+from gits.core.scope import self_of
 
 DAY = 86_400_000
 #: 每对每天主动上限。**只设上限，不设下限**

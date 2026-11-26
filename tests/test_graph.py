@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from gits import graph
-from gits.db import DB, Writer
-from gits.project import entity_id
+from gits.memory import graph
+from gits.core.db import DB, Writer
+from gits.core.project import entity_id
 
 T0 = 1_800_000_000_000
 DAY = 86_400_000
@@ -66,7 +66,7 @@ def test_样本多了就接近极大似然(db) -> None:
 
 def test_重放是确定的(db, tmp_path: Path) -> None:
     """"""
-    from gits import project
+    from gits.core import project
 
     ev, _ = Writer(db).append_event(
         source="shell", kind="msg_in", ext_id="m1", ts=T0, recv_ts=T0,
@@ -98,7 +98,7 @@ def test_强度是求和不是数行数(db) -> None:
 
 
 def test_注意力按分量算而不是按条数(db) -> None:
-    from gits import attention
+    from gits.social import attention
 
     # 同样 3 条边，但一边每条都很重；实体节点要存在，_mentions 要 join 名字
     for name in ("开会", "咖啡"):

@@ -16,7 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
-SCHEMA_DIR = Path(__file__).parent / "schema"
+# schema/ 留在包根：它是所有模块共用的目录，不属于 core 自己。
+SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schema"
 
 #: 真相所在的流。同步与重放都以它们为单位（DESIGN §3.1）。
 LOG_STREAMS = ("events", "model_calls", "observability", "redactions")

@@ -15,9 +15,9 @@ import sys
 import time
 from pathlib import Path
 
-from .db import DB, Writer, now_ms
-from .events import cursor, export_logset, import_logset, iter_events
-from .project import dump_projection, restore, trace
+from gits.core.db import DB, Writer, now_ms
+from gits.core.events import cursor, export_logset, import_logset, iter_events
+from gits.core.project import dump_projection, restore, trace
 
 DEFAULT_DB = Path.home() / ".local/share/gits/gits.db"
 
@@ -39,7 +39,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             "SELECT count(*) FROM events e WHERE e.kind IN ('msg_in','inner')"
             " AND NOT EXISTS (SELECT 1 FROM model_calls m WHERE m.event_id=e.id)"
         ) or 0
-        from gits import persona, wipe
+        from gits.memory import persona
+        from gits.core import wipe
 
         state = wipe.states(db)
         a = persona.current(db)
@@ -103,7 +104,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
 def cmd_quota(args: argparse.Namespace) -> int:
     """额度账户。像电子账户一样，规则全部可见。"""
-    from .quota import Account, Budget, allowance
+    from gits.io.quota import Account, Budget, allowance
     b = Budget(monthly_cny=args.monthly)
     a = allowance(b, args.actor)
     cap = a.cny * 5
@@ -138,7 +139,7 @@ def cmd_shell(args: argparse.Namespace) -> int:
     """通道。往外投递 outbox，往里收消息。"""
     import asyncio as _asyncio
 
-    from .shell import FileChannel, WeixinAdapter, serve
+    from gits.io.shell import FileChannel, WeixinAdapter, serve
 
     channels = []
     if args.weixin_state:
@@ -261,7 +262,7 @@ def cmd_weixin(args: argparse.Namespace) -> int:
 
 def cmd_recall(args: argparse.Namespace) -> int:
     """她此刻能想起什么。走真实的 nodes / node_content / FTS / r。"""
-    from .recall import recall
+    from gits.memory.recall import recall
     with _open(args) as db:
         rows = recall(db, args.query, actor="her", context=args.context or "",
                       now_ms=args.now or now_ms(), k=args.k)
@@ -275,8 +276,8 @@ def cmd_recall(args: argparse.Namespace) -> int:
 
 def cmd_turn(args: argparse.Namespace) -> int:
     """拼出一轮的 prompt（A/B/C）。用来看「她记得什么」到底长什么样。"""
-    from .context import PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket
-    from .recall import lines, recall
+    from gits.speech.context import PersonaSeed, RelationSnapshot, TurnContext, assemble, bucket
+    from gits.memory.recall import lines, recall
     with _open(args) as db:
         t = args.now or now_ms()
         rows = recall(db, args.text, actor="her", context=args.context or "", now_ms=t, k=args.k)
@@ -302,7 +303,7 @@ def cmd_trace(args: argparse.Namespace) -> int:
 
 def cmd_sync(args: argparse.Namespace) -> int:
     """从另一份库拉增量。反复调用直到没有新增（断点续传就这么简单）。"""
-    from .replica import pull
+    from gits.core.replica import pull
     with _open(args) as dst:
         with DB(Path(args.src)) as src:
             rounds, total = 0, {}
@@ -321,7 +322,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     """副本重放之后，投影必须和源一致。"""
-    from .replica import verify
+    from gits.core.replica import verify
     with DB(Path(args.src)) as src:
         with DB(Path(args.db)) as dst:
             ok, why = verify(src, dst)
@@ -488,7 +489,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_import_seed(args: argparse.Namespace) -> int:
-    from gits import seedfile
+    from gits.core import seedfile
 
     db = DB(Path(args.db))
     path: Path | None = None
@@ -535,7 +536,8 @@ def cmd_import_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_wipe(args: argparse.Namespace) -> int:
-    from gits import persona, wipe
+    from gits.memory import persona
+    from gits.core import wipe
 
     db = DB(Path(args.db))
     before = wipe.states(db, actor=args.actor)
@@ -557,8 +559,9 @@ def cmd_wipe(args: argparse.Namespace) -> int:
 
 
 def cmd_seed(args: argparse.Namespace) -> int:
-    from gits import actors, attention
-    from gits.persona import seed
+    from gits.social import actors
+    from gits.social import attention
+    from gits.memory.persona import seed
 
     db = DB(Path(args.db))
     if not args.text and not args.topic:
@@ -589,7 +592,7 @@ def cmd_seed(args: argparse.Namespace) -> int:
 
 
 def cmd_persona(args: argparse.Namespace) -> int:
-    from gits import persona
+    from gits.memory import persona
 
     db = DB(Path(args.db))
     if args.snapshot:
@@ -612,8 +615,8 @@ def cmd_persona(args: argparse.Namespace) -> int:
 
 
 def cmd_aliases(args: argparse.Namespace) -> int:
-    from gits import semantic
-    from gits.project import entity_id
+    from gits.memory import semantic
+    from gits.core.project import entity_id
 
     db = DB(Path(args.db))
     if args.merge:
@@ -648,7 +651,7 @@ def cmd_aliases(args: argparse.Namespace) -> int:
 
 
 def cmd_funnel(args: argparse.Namespace) -> int:
-    from gits import funnel
+    from gits.memory import funnel
 
     db = DB(Path(args.db))
     t = now_ms()
@@ -672,7 +675,9 @@ def cmd_funnel(args: argparse.Namespace) -> int:
 
 
 def cmd_peers(args: argparse.Namespace) -> int:
-    from gits import actors, attention, peer
+    from gits.social import actors
+    from gits.social import attention
+    from gits.social import peer
 
     db = DB(Path(args.db))
     actors.ensure(db, actors.MAIN, is_main=True)
@@ -702,7 +707,8 @@ def cmd_peers(args: argparse.Namespace) -> int:
 
 
 def cmd_peer_turn(args: argparse.Namespace) -> int:
-    from gits import actors, peer
+    from gits.social import actors
+    from gits.social import peer
 
     db = DB(Path(args.db))
     turn = peer.received(db, args.actor)

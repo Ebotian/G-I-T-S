@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer, now_ms
-from gits.delivery import claim, dispatch, expire
-from gits.shell import FileChannel, Shell, serve
+from gits.core.db import DB, Writer, now_ms
+from gits.io.delivery import claim, dispatch, expire
+from gits.io.shell import FileChannel, Shell, serve
 
 T0 = 1_800_000_000_000
 MIN = 60_000

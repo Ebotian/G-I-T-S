@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 
-from gits.db import DB, Writer
+from gits.core.db import DB, Writer
 
 #: 8 个角度，按圆盘顺序排（对面 = 反义）
 ANGLES = ("joy", "trust", "fear", "surprise",

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from gits.sync import (
+from gits.core.sync import (
     BY_NAME, STREAMS, TIERS, compatible, echo_merge, plan, producer_of,
 )
 

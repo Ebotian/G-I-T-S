@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from gits.fsrs import Memory, Rating
+from gits.memory.fsrs import Memory, Rating
 
 DAY = 86_400_000
 

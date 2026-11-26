@@ -13,10 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from gits import gate, unresolved
-from gits.db import DB, Writer
-from gits.graph import add_edge
-from gits.project import entity_id
+from gits.speech import gate
+from gits.speech import unresolved
+from gits.core.db import DB, Writer
+from gits.memory.graph import add_edge
+from gits.core.project import entity_id
 
 T0 = 1_800_000_000_000
 HOUR = 3_600_000

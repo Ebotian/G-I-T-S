@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gits.context import (PersonaSeed, RelationSnapshot, TurnContext, bucket,
+from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext, bucket,
                           messages)
 
 T0 = 1_800_000_000_000
@@ -53,7 +53,7 @@ def test_易变的都在最后一条() -> None:
 
 
 def test_一小时之内_B_段逐字不变() -> None:
-    from gits.context import render_b
+    from gits.speech.context import render_b
 
     assert render_b(SNAP) == render_b(SNAP)
     assert bucket(T0) == bucket(T0 + 59 * 60_000)

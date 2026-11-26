@@ -11,10 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from gits import replica
-from gits.db import DB, Writer
-from gits.events import export_logset, import_logset
-from gits.project import dump_projection, restore
+from gits.core import replica
+from gits.core.db import DB, Writer
+from gits.core.events import export_logset, import_logset
+from gits.core.project import dump_projection, restore
 
 T0 = 1_800_000_000_000
 MIN = 60_000

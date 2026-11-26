@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from gits import respond as R
-from gits.db import DB, Writer
-from gits.llm import Reply
+from gits.speech import respond as R
+from gits.core.db import DB, Writer
+from gits.speech.llm import Reply
 
 T0 = 1_800_000_000_000
 
@@ -32,7 +32,7 @@ def db(tmp_path: Path):
 
 
 def _persona(db: DB) -> None:
-    from gits.persona import seed
+    from gits.memory.persona import seed
     seed(db, "我不太会哄人。我记得住具体的事。", now=T0)
 
 
@@ -96,7 +96,7 @@ def test_A_段在同一版人格下逐字不变(db, stub) -> None:
 
 
 def test_没有模型密钥时错误要能读懂(db, monkeypatch) -> None:
-    from gits.llm import LLMError, chat
+    from gits.speech.llm import LLMError, chat
 
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     with pytest.raises(LLMError, match="DEEPSEEK_API_KEY"):

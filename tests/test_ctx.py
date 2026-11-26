@@ -14,11 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from gits import compact as C
-from gits import ctxwin, project
-from gits.db import DB, Writer
-from gits.idle import MIN_GAPS, Idle, estimate, gaps_of
-from gits.llm import Reply
+from gits.memory import compact as C
+from gits.speech import ctxwin
+from gits.core import project
+from gits.core.db import DB, Writer
+from gits.time.idle import MIN_GAPS, Idle, estimate, gaps_of
+from gits.speech.llm import Reply
 
 T0 = 1_800_000_000_000
 MIN = 60_000

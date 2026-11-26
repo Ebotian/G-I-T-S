@@ -16,7 +16,7 @@ from __future__ import annotations
 import statistics as st
 from dataclasses import dataclass
 
-from gits.decay import MODELS, build
+from gits.time.decay import MODELS, build
 from synth.facts import DAY, Facts, generate
 
 HORIZON = 7 * DAY

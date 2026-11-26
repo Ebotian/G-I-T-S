@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from gits.db import DB, Writer, now_ms
-from gits.recall import reindex
+from gits.core.db import DB, Writer, now_ms
+from gits.memory.recall import reindex
 
 HOUR = 3_600_000
 
@@ -203,8 +203,8 @@ class Ghost:
 
     def night(self, t: int | None = None) -> str:
         """夜里该不该动人格。先判定、记账；确认过得去了才真的改。"""
-        from gits import night as N
-        from gits import persona
+        from gits.time import night as N
+        from gits.memory import persona
 
         t = now_ms() if t is None else t
         self._last_night = t
@@ -228,7 +228,9 @@ class Ghost:
         """注意力漂一天。**只漂非主个体**——她的变化必须来自真实互动。"""
         from itertools import combinations
 
-        from gits import actors, attention, peer as P
+        from gits.social import actors
+        from gits.social import attention
+        from gits.social import peer as P
 
         t = now_ms() if t is None else t
         names = actors.peers(self.db)          # 不含她
@@ -242,13 +244,13 @@ class Ghost:
 
     def window(self, t: int | None = None) -> str:
         """该不该换窗。**整理是后台活，先在闲得够久的时候做。**"""
-        from gits import ctxwin
-        from gits.compact import compact
-        from gits.idle import estimate
+        from gits.speech import ctxwin
+        from gits.memory.compact import compact
+        from gits.time import expected_idle
 
         t = now_ms() if t is None else t
         self._last_ctx = t
-        plan = ctxwin.plan(self.db, now=t, idle=estimate(self.db, t),
+        plan = ctxwin.plan(self.db, now=t, idle=expected_idle(self.db, t),
                            compact_ms=self.compact_ms_est)
         if plan.action in ("compact_idle", "compact_force"):
             # **整理不在心跳线程里跑。** 它要一次 thinking=high 的调用（几秒到几十秒），
@@ -269,7 +271,7 @@ class Ghost:
         **先回话，再抽取**：回话时那条消息本身就在 C 段里，不缺它；
         而抽取开着 thinking，慢一点无所谓。
         """
-        from gits.extract import extract, pending
+        from gits.memory.extract import extract, pending
 
         self._last_extract = now_ms() if t is None else t
         n = 0
@@ -283,7 +285,7 @@ class Ghost:
 
     def reply(self, t: int | None = None) -> int:
         """该回的话回一句。失败**不重试到天荒地老**——记下来，下一拍再说。"""
-        from gits.respond import respond_pending
+        from gits.speech.respond import respond_pending
 
         self._last_reply = now_ms() if t is None else t
         try:

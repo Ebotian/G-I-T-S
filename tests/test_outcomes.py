@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from gits.db import DB, Writer
-from gits.shell import Shell
+from gits.core.db import DB, Writer
+from gits.io.shell import Shell
 
 T0 = 1_800_000_000_000
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gits.db import DB, Writer, now_ms
+from gits.core.db import DB, Writer, now_ms
 
 MAIN = "her"
 

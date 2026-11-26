@@ -13,11 +13,11 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import mkdtemp
 
-from gits.recall import recall
+from gits.memory.recall import recall
 from synth.bridge import load
 from synth.eval_search import build_index
 from synth.facts import Facts
-from gits.search import search as raw_search
+from gits.memory.search import search as raw_search
 
 
 def compare(fs: Facts, *, n_samples: int = 12) -> dict:
