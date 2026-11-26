@@ -168,7 +168,7 @@ class Ghost:
                 " VALUES(?,?,?,?,?,?) ON CONFLICT(ts) DO NOTHING",
                 (t, "AWAKE", None, None, backlog, self.node),
             )
-        reindex(self.db)
+        # 索引在内容提交时就更新了（core/project.py），这里不再全量重建。
         self._last_snapshot = t
 
     # ── 一拍 ──

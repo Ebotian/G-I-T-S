@@ -134,8 +134,14 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
         " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
         (nid, "episode" if kind == "msg_in" else "self", ts, scope,
          s0, 1.0, ts, aff_angle, aff_inten))
+    summary_text = str(payload.get("summary", "")).strip()
     conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
-                 " VALUES(?,?,?)", (nid, str(payload.get("summary", "")).strip(), ts))
+                 " VALUES(?,?,?)", (nid, summary_text, ts))
+    # **写的时候就索引**：以前靠每 15 分钟全量重建，于是刚抽取的记忆
+    # 要等到下次快照才检索得到，而全量重建又是先清表再重插。
+    from gits.memory.search import index_node
+
+    index_node(conn, nid, summary_text)
 
     def touch(nid_: str, name: str) -> None:
         conn.execute(
@@ -165,11 +171,18 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
         # **同一个实体不该攒一堆同样的内容行**。实测三条消息提到了同一个
         # 「消息」，于是 node_content 里躺着三份一模一样的文本——
         # 检索时它们会互相挤占名额，r 也算不准。
+        before = conn.execute(
+            "SELECT count(*) FROM node_content WHERE node_id=? AND content=?",
+            (nid_, name)).fetchone()[0]
         conn.execute(
             "INSERT INTO node_content(node_id, content, created_ts)"
             " SELECT ?,?,? WHERE NOT EXISTS"
             " (SELECT 1 FROM node_content WHERE node_id=? AND content=?)",
             (nid_, name, ts, nid_, name))
+        if not before:                    # 只在真的新增了内容时建索引
+            from gits.memory.search import index_node
+
+            index_node(conn, nid_, name)
 
     def link(a: str, b: str, w: float, edge_kind: str) -> None:
         # 带遗忘的计数：旧值先按时间衰减，再加这次（见 graph.py）。
@@ -394,6 +407,10 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
                 )
             _apply(c, row, response)
             n += 1
+    # 重放是显式恢复路径：整表重建一次，代价可以接受。
+    from gits.memory.recall import reindex
+
+    reindex(db)
     return n
 
 

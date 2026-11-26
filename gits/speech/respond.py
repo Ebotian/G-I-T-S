@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
 from gits.speech import ctxwin
-from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext, assemble,
-                          bucket, messages)
+from gits.speech.context import (PersonaSeed, RelationSnapshot, TurnContext,
+                          bucket, messages, render_a)
 from gits.core.db import DB, Writer, now_ms
 from gits.speech.llm import Reply, chat, cost_cny
 from gits.memory.recall import lines, recall, reinforce_hits
@@ -142,7 +143,9 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
                       due=fact_lines(db, now))
-    prompt = assemble(seed, snap, ctx)
+    # 只要 A 段的哈希（用于 influence 溯源），不必再跑一遍完整装配——
+    # 两套装配并存过一段时间，固定事实就是从它们的缝里漏掉的。
+    a_hash = render_a(seed)
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
     reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
@@ -163,7 +166,7 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     call_id = Writer(db).append_model_call(
         kind="reply", model=reply.model, response=reply.text,
         event_id=event["id"], usage_json=str(reply.usage),
-        prompt_hash=prompt.a_hash,
+        prompt_hash=hashlib.sha256(a_hash.encode()).hexdigest(),
     )
 
     # **收件人由触发这条回复的消息决定**，不是"最近联系人"。
@@ -193,9 +196,10 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     # 溯源：这句话用了哪版人格、哪次调用（§3.1 可追溯）
     with Writer(db).txn() as c:
+        persona_tag = "persona:v" + hashlib.sha256(
+            a_hash.encode()).hexdigest()[:12]
         c.execute("INSERT INTO influence(outbox_id, node_id, w, model_call_id)"
-                  " VALUES(?,?,?,?)", (outbox_id, f"persona:v{prompt.a_hash[:12]}",
-                                       1.0, call_id))
+                  " VALUES(?,?,?,?)", (outbox_id, persona_tag, 1.0, call_id))
         # **把真正进了上下文的节点也记下来**。
         # 只记人格哈希的话，事后能回答"用了哪版人格"，却回答不了
         # "这句话凭什么"——而后者才是她能被追问的那个问题。
