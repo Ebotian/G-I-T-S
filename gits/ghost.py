@@ -298,6 +298,10 @@ class Ghost:
         for key, value in got.items():
             if key not in C.ALLOWED:
                 continue
+            # **只动周更的那些。** 血型、性别这类不会变的事实，
+            # 被"总结"成别的不是生活变化，是错误。
+            if key not in C.WEEKLY_KEYS:
+                continue
             ok, why = C.bounded(self.db, key=key, value=value, now=t)
             if not ok:
                 self.fault("character:" + str(key), ValueError(why), now=t)

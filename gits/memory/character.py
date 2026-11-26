@@ -63,7 +63,36 @@ BOUNDS: dict[str, float] = {"shoe_size": 0.5}
 MONOTONIC = frozenset({"height_cm"})
 #: 这些键允许存在。名字固定，免得模型的自由发挥变成一堆散字段。
 ALLOWED = frozenset({"birth_date", "height_cm", "weight_kg", "gender",
-                     "eye_color", "hair_color", "shoe_size"})
+                     "eye_color", "hair_color", "shoe_size",
+                     "vision_left", "vision_right", "blood_type",
+                     "resting_hr", "waist_cm"})
+
+#: **每个事实多久更新一次，怎么更新。**
+#:
+#: "不同的状态不同的时序"就写在这一张表里——不要散在 if 里。
+#: 三种节奏：
+#:
+#:     derived   读的时候算，不存（年龄）
+#:     weekly    周日夜里由模型总结性更新（身高体重这类会慢变的量）
+#:     manual    只在明确给出时写（血型、色觉——它们不会变，也不该被"总结"）
+CADENCE: dict[str, str] = {
+    "birth_date": "manual",
+    "height_cm": "weekly",
+    "weight_kg": "weekly",
+    "waist_cm": "weekly",
+    "vision_left": "weekly",
+    "vision_right": "weekly",
+    "resting_hr": "weekly",
+    "gender": "manual",
+    "blood_type": "manual",
+    "eye_color": "manual",
+    "hair_color": "manual",
+    "shoe_size": "manual",
+}
+
+#: 周更时允许模型动的键。**manual 的一律不许它改**——
+#: 血型被"总结"成别的，不是生活变化，是错误。
+WEEKLY_KEYS = frozenset(k for k, v in CADENCE.items() if v == "weekly")
 #: 每周最多更新几次（防止 dream 跑两遍就多写一份）
 
 

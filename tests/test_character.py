@@ -221,3 +221,39 @@ def test_青春期一年十厘米在一周里合理(db) -> None:
     ok, why = C.bounded(db, key="height_cm", value=155.2, now=T0)
     assert ok is True, why
     assert "13 岁" in why, why
+
+
+# ── 哪些事实会变、怎么变 ────────────────────────────────────
+
+
+def test_不会变的事实不许被周更改(db, monkeypatch) -> None:
+    """血型被"总结"成别的，不是生活变化，是错误。"""
+    from gits.speech.llm import Reply
+    from gits.ghost import Ghost
+
+    C.record(db, key="blood_type", value="A", now=T0)
+    sunday = int(dt.datetime(2026, 11, 29, 21, 0).timestamp() * 1000)
+    monkeypatch.setattr(
+        "gits.speech.llm.chat",
+        lambda *a, **k: Reply(text='{"blood_type": "B", "weight_kg": 52.2}',
+                              model="stub", usage={}, latency_ms=1))
+    changed = Ghost(db).character_weekly(sunday)
+    assert "blood_type" not in changed
+    assert C.current(db)["blood_type"] == "A"
+    assert "weight_kg" in changed
+
+
+def test_每种事实有自己的更新节奏() -> None:
+    """不同状态不同时序——写在表里，不散在 if 里。"""
+    assert C.CADENCE["height_cm"] == "weekly"
+    assert C.CADENCE["blood_type"] == "manual"
+    assert "height_cm" in C.WEEKLY_KEYS
+    assert "blood_type" not in C.WEEKLY_KEYS
+    for key in C.ALLOWED:
+        assert key in C.CADENCE, f"{key} 没有说明多久更新一次"
+
+
+def test_年龄不存_所以不在节奏表里(db) -> None:
+    assert "age" not in C.CADENCE and "age" not in C.ALLOWED
+    C.record(db, key="birth_date", value="1999-11-30", now=T0)
+    assert C.age(db, now=T0) == 26

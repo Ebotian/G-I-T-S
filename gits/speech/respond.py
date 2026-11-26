@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -170,6 +171,7 @@ def _prepare(db: DB, *, now: int, actor: str, stimulus: str,
     from gits.memory import character
 
     self_facts = character.line(db, now=now) if fresh_window else ""
+
     background = brief_text(db, now=now, actor=actor, head=fresh_window)
     if self_facts:
         background = ("# 关于你自己（事实，不是设定）" + chr(10)
