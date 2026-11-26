@@ -27,6 +27,8 @@ class Reply:
     model: str
     usage: dict
     latency_ms: int
+    #: 模型要求调工具时的原始列表。空 = 它直接回答了。
+    tool_calls: list[dict] | None = None
 
 
 class LLMError(RuntimeError):
@@ -43,6 +45,7 @@ def _key() -> str:
 def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 300,
          temperature: float = 1.0, safety_check: bool = False,
          thinking: bool = False, effort: str = "high",
+         tools: list[dict] | None = None,
          timeout: float = 60.0) -> Reply:
     """一次非流式调用。
 
@@ -64,6 +67,10 @@ def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 
         body["reasoning_effort"] = effort
     if safety_check:
         body["safety_check"] = {"level": "high"}
+    if tools:
+        # 工具定义是**静态**的：同一批工具、同一份 schema，才能吃到前缀缓存。
+        body["tools"] = tools
+        body["tool_choice"] = "auto"
 
     req = urllib.request.Request(
         f"{BASE}/chat/completions",
@@ -85,10 +92,13 @@ def chat(messages: list[dict], *, model: str = DEFAULT_MODEL, max_tokens: int = 
     choices = payload.get("choices") or []
     if not choices:
         raise LLMError(f"没有 choices：{json.dumps(payload)[:200]}")
-    text = (choices[0].get("message") or {}).get("content") or ""
+    msg = choices[0].get("message") or {}
+    text = msg.get("content") or ""
+    calls = msg.get("tool_calls") or None
     return Reply(text=text.strip(), model=payload.get("model", model),
                  usage=payload.get("usage") or {},
-                 latency_ms=int((time.monotonic() - t0) * 1000))
+                 latency_ms=int((time.monotonic() - t0) * 1000),
+                 tool_calls=calls)
 
 
 def cost_cny(usage: dict) -> float:

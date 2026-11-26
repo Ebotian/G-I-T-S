@@ -182,7 +182,21 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     a_hash = render_a(seed)
     # 请求体按缓存布局拼：稳定前缀在前，历史轮次只追加，易变的在最后。
     body = messages(seed, snap, ctx, turns=history[:-1] if history else ())
-    reply = chat(body, model=model, max_tokens=max_tokens, thinking=False)
+
+    # **工具按节奏放行。** 高频对话里多一个来回就是"卡住了"——
+    # pacing 判间隔分布，主动开口永远允许。目录为空时整条路径不生效。
+    from gits.speech import pacing, tools_loop
+    from gits.world import catalog, detail
+
+    # 主动开口：没有人等着，等一下不突兀。由调用方（ghost）显式标注，
+    # 不靠 payload 里的魔法前缀去猜。
+    proactive = bool(event.get("proactive"))
+    allowed, _why = pacing.tools_allowed(db, now=now, proactive=proactive)
+    cat = catalog(db, now=now, proactive=proactive) if allowed else ()
+    reply = tools_loop.run(
+        chat, body, catalog=cat,
+        detail=lambda kind, **kw: detail(db, kind, now=now, **kw),
+        now=now, model=model, max_tokens=max_tokens, thinking=False)
 
     # **出口清洗**：整句收笔、洗链接、去交差腔。
     # max_tokens 是保险丝不是尺——顶头会拦腰掐断，一条微信停在逗号上比不发更糟。
