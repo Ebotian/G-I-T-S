@@ -63,8 +63,10 @@ def record(db: DB, *, lat: float, lon: float, acc: float | None = None,
     if city:
         payload.update({k: city[k] for k in ("province", "city", "district",
                                              "adcode") if city.get(k)})
-    # 幂等：同一秒同一坐标就是同一条
-    ext = f"phone:loc:{ts}:{payload['lat']:.5f},{payload['lon']:.5f}"
+    # 幂等键**不带坐标**。带坐标的话，撤回（redact）清了 payload，
+    # 坐标却还留在 ext_id 里——导出日志就能读到，等于撤回撤不干净。
+    # 手机给的定位时间本身就足以区分（一秒一次都算密了）。
+    ext = f"phone:loc:{ts}"
     return Writer(db).append_event(
         source="phone", kind="reading", ext_id=ext, ts=ts,
         recv_ts=int(now or ts), payload=json.dumps(payload, ensure_ascii=False).encode(),

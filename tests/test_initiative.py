@@ -29,6 +29,15 @@ def db(tmp_path: Path):
     d.close()
 
 
+def _said(db: DB, *, now: int, candidate: str | None = None) -> int | None:
+    """"说过一句话"——决定 + 通道接了。**只 record 不算说过。**"""
+    ev = I.record(db, now=now, reason="测试", candidate=candidate)
+    with Writer(db).txn() as c:
+        c.execute("INSERT INTO outbox(ts, channel, text, status, ref_event_id)"
+                  " VALUES(?,?,?,'sent',?)", (now, "weixin", "在吗", ev))
+    return ev
+
+
 def _dangling(db: DB, name: str = "看病", *, times: int = 3,
               start: int = T0 - 6 * HOUR) -> str:
     from gits.core.project import entity_id
@@ -71,9 +80,9 @@ def test_压力积的是闲的时间不是墙钟(db) -> None:
     """同样隔 3 小时，他在闲的时候攒得快，在忙的时候攒得慢。"""
     _busy(db, hours=(14, 15, 16, 17))
     morning = int(dt.datetime(2026, 11, 26, 10, 0).timestamp() * 1000)
-    I.record(db, now=morning - 3 * HOUR, reason="x", candidate=None)
+    _said(db, now=morning - 3 * HOUR)
     idle_hours = I.pressure(db, now=morning)          # 07-10 点：他基本不说话
-    I.record(db, now=T0, reason="x", candidate=None)
+    _said(db, now=T0)
     busy_hours = I.pressure(db, now=T0 + 3 * HOUR)    # 15-18 点：他在说话
     assert busy_hours > idle_hours, (idle_hours, busy_hours)
 
@@ -85,8 +94,8 @@ def test_没回复的惩罚按当时在线概率加权(db) -> None:
     quiet = int(dt.datetime(2026, 11, 26, 3, 0).timestamp() * 1000)
     # 17:30：他在说话，而且之后六小时没有他的消息 → 沉默是意外
     busy = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
-    I.record(db, now=quiet, reason="夜里说的", candidate=None)
-    I.record(db, now=busy, reason="白天说的", candidate=None)
+    _said(db, now=quiet)
+    _said(db, now=busy)
     factor, weight = I.unanswered(db, now=T0 + 10 * HOUR)
     assert weight > 0
     assert factor < 1.0, "白天的沉默没被罚"
@@ -104,9 +113,9 @@ def test_允许重发但惩罚累积(db) -> None:
     d2 = int(dt.datetime(2026, 11, 25, 17, 30).timestamp() * 1000)
     d3 = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
     one = I.unanswered(db, now=d1)[0]
-    I.record(db, now=d1, reason="1", candidate=None)
+    _said(db, now=d1)
     two = I.unanswered(db, now=d2)[0]
-    I.record(db, now=d2, reason="2", candidate=None)
+    _said(db, now=d2)
     three = I.unanswered(db, now=d3)[0]
     assert three < two < one, (one, two, three)
     assert three > 0, "罚到零就永远不说了——那是饿死"
@@ -172,7 +181,7 @@ def test_欠账也是积分出来的(db) -> None:
     _busy(db)
     # 17:30 说了一句：他在 17 点那个小时是活跃的，但之后到第二天都没有消息
     said = int(dt.datetime(2026, 11, 26, 17, 30).timestamp() * 1000)
-    I.record(db, now=said, reason="x", candidate=None)
+    _said(db, now=said)
     idle = I.opportunity(db, start=said, end=said + 6 * HOUR)
     assert idle > 0.2, idle
     factor, weight = I.unanswered(db, now=said + 8 * HOUR)
@@ -198,7 +207,7 @@ def test_闲得越久欠得越多(db) -> None:
     """欠账随「他闲了多久」连续增长，不是 0/1 跳变。"""
     _busy(db, hours=(15,))
     base = int(dt.datetime(2026, 11, 26, 15, 0).timestamp() * 1000)
-    I.record(db, now=base, reason="x", candidate=None)
+    _said(db, now=base)
     soon = I.unanswered(db, now=base + 30 * 60_000)[0]
     later = I.unanswered(db, now=base + 5 * HOUR)[0]
     assert later < soon < 1.0, (soon, later)
@@ -210,6 +219,6 @@ def test_欠账要归一化_一直在也不该无限罚(db, monkeypatch) -> None
     _busy(db)
     monkeypatch.setattr(I, "online", lambda db, ts, snap=None: 1.0)
     said = int(dt.datetime(2026, 11, 26, 1, 0).timestamp() * 1000)
-    I.record(db, now=said, reason="x", candidate=None)
+    _said(db, now=said)
     _factor, weight = I.unanswered(db, now=said + 8 * HOUR)
     assert weight == pytest.approx(1.0), weight

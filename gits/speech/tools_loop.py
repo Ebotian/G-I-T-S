@@ -76,9 +76,11 @@ def run(chat: Callable[..., Reply], body: list[dict], *, catalog: tuple[dict, ..
         # **工具坏了不能让她没话说。** 查不到就当没查过——
         # 因为工具挂了就不回话，比回一句不知道糟得多。
         try:
-            got = detail(name, now=now, **args)
-        except Exception:
-            got = {}
+            got = detail(name, **args)
+        except Exception as exc:
+            # **失败要能和"没有记录"区分开。** 都返回空对象的话，
+            # 模型会以为自己查过了、只是没资料。
+            got = {"error": type(exc).__name__}
         msgs.append({"role": "tool", "tool_call_id": call.get("id") or name,
                      "content": _dump(got)})
         used += 1

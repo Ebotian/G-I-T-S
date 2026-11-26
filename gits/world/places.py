@@ -57,8 +57,11 @@ def _readings(db: DB, *, after: int, limit: int = 5000) -> list[dict]:
     import json
 
     out = []
+    # **撤回过的读数是死的。** 不筛掉的话，用户撤回授权之后，
+    # 学出来的场所和停留还在——坐标清了，结论没清。
     for row in db.q(
             "SELECT id, payload FROM events WHERE kind='reading' AND id>?"
+            " AND id NOT IN (SELECT event_id FROM redactions)"
             " ORDER BY id LIMIT ?", (after, limit)):
         try:
             r = json.loads((row["payload"] or b"{}").decode("utf-8"))

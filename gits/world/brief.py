@@ -62,7 +62,11 @@ def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
 
     out: dict[str, Any] = {}
 
-    cur = places.current(db, actor=actor)
+    # **先看位置还新不新。** 场所状态是"上次确认在那里"，不是"现在还在那里"。
+    # 没有新鲜读数时，两个字都不能说：loc 会变成"他现在在某处"的断言，
+    # stay 会把"七天没上报"写成"连续待了七天"。
+    fresh = loc.fresh(db, now=now)
+    cur = places.current(db, actor=actor) if fresh else None
     if cur:
         since = int(cur.get("since") or 0)
         if since:

@@ -98,7 +98,10 @@ def _self(db: DB, *, now: int, actor: str = "her", **_: Any) -> dict[str, Any]:
 
 
 def _name_place(db: DB, *, now: int, place_id: int | None = None,
-                alias: str = "", **_: Any) -> dict[str, Any]:
+                alias: str = "", name: str = "", **_k: Any) -> dict[str, Any]:
+    # `name` 是工具循环解析出来的通用参数名；`alias` 是这里要的。
+    # 两个名字都认——契约不一致的代价是"起了名字但没生效"，而且不报错。
+    alias = alias or name
     """**她的命名/写入口。** 给一个地方起名字。
 
     名字是标注不是学习结果，所以它允许被写——但仍然走事件，可重放、可清。

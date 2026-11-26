@@ -50,7 +50,23 @@ REPLY_WINDOW_MS = 6 * 3_600_000
 
 
 def spoken(db: DB, *, actor: str = "her") -> list[int]:
-    """主动开口的时间戳，最近的在前。"""
+    """**真的说出去过**的时间戳，最近的在前。压力靠它算。
+
+    判据是"通道接了"，不是"她决定了"：`initiative` 事件只代表决定，
+    只有同时存在一条指向它的 outbox 行，才算说到他耳朵里。
+
+    这个区分是必须的。以前一律计入，结果是：她决定要说、但根本没发出去，
+    压力就归零了，之后还会因为"他没回"累计惩罚——
+    **为一句他从来没收到的话罚他。**
+    """
+    return [int(r["ts"]) for r in db.q(
+        "SELECT e.ts FROM events e WHERE e.kind='initiative' AND e.scope=?"
+        " AND EXISTS (SELECT 1 FROM outbox o WHERE o.ref_event_id = e.id)"
+        " ORDER BY e.ts DESC LIMIT 40", (f"self:{actor}",))]
+
+
+def decided(db: DB, *, actor: str = "her") -> list[int]:
+    """她决定要说的时间戳——**包括没走出去的**。只给观察用，不进压力。"""
     return [int(r["ts"]) for r in db.q(
         "SELECT ts FROM events WHERE kind='initiative' AND scope=?"
         " ORDER BY ts DESC LIMIT 40", (f"self:{actor}",))]
@@ -120,8 +136,12 @@ def unanswered(db: DB, *, now: int, actor: str = "her",
     for ts in spoken(db, actor=actor):
         if ts > now:
             continue
+        # **只有他的消息算回应。** 以前窗口里任何 msg_in 都算，于是
+        # 两个同伴互发一条私信，主实例就以为"他刚刚回应了我"。
+        # 他的消息在 world 域；同伴的在自己域里（self:peerN）。
         replied = db.scalar(
-            "SELECT count(*) FROM events WHERE kind='msg_in' AND ts>? AND ts<=?",
+            "SELECT count(*) FROM events WHERE kind='msg_in'"
+            " AND scope='world' AND ts>? AND ts<=?",
             (ts, ts + window))
         if replied:
             continue
@@ -167,6 +187,16 @@ def assemble(db: DB, *, now: int, actor: str, cand: Any,
         mom = drive.read(db, actor, now=now)
     except Exception:
         mom = None
+    # **共鸣要绑在抽到的那件事上。** 真实开口路径以前没传，默认零——
+    # 设计里"这件事让我想起什么"那部分影响不到任何判定。
+    from gits.memory.recall import recall
+    from gits.speech.unresolved import name_of
+
+    probe = name_of(db, cand.entity) if cand is not None else ""
+    resonance = 0.0
+    if probe:
+        hits = recall(db, probe, actor=actor, now_ms=now, k=3)
+        resonance = max((h.sim for h in hits), default=0.0)
     backlog = min(1.0, len(pending(db, actor=actor, limit=5)) / 3.0)
     consec = len([t for t in spoken(db, actor=actor) if now - t < 6 * 3_600_000])
     penalty, _w = unanswered(db, now=now, actor=actor)
@@ -175,7 +205,7 @@ def assemble(db: DB, *, now: int, actor: str, cand: Any,
         unexcluded=float(cand.unexcluded), resolvable=float(cand.resolvable),
         backlog_pressure=backlog, consecutive=consec,
         confidence=conf, drive=mom, presence=online(db, ts=now),
-        unanswered=penalty)
+        resonance=resonance, unanswered=penalty)
 
 
 def check(db: DB, *, now: int, actor: str = "her",

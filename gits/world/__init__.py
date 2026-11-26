@@ -53,7 +53,9 @@ def detail(db: DB, kind: str, *, now: int, proactive: bool = False,
     from gits.speech import pacing
     from gits.world import tools as _t
 
-    ok, _why = pacing.tools_allowed(db, now=now, proactive=proactive)
+    ok, why = pacing.tools_allowed(db, now=now, proactive=proactive)
     if not ok:
-        return {}
+        # **"不能查"和"查了没有"必须能分开。** 都返回 {} 的话，
+        # 模型会把"工具被禁用"当成"他确实没资料"，然后据此说话。
+        return {"error": "工具此时不可用", "why": why}
     return _t.detail(db, kind, now=now, **kw)

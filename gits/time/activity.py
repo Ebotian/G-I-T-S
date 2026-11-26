@@ -40,8 +40,10 @@ class Snapshot:
     def __init__(self, db: DB, *, now: int) -> None:
         self.marker = int(db.scalar(
             "SELECT coalesce(max(id), 0) FROM events WHERE kind='msg_in'") or 0)
+        # **只数他的消息。** 同伴之间的私信在各自域里（self:peerN），
+        # 混进来会让"用户活跃度"被别人的对话带动。
         rows = db.q("SELECT ts FROM events WHERE kind='msg_in'"
-                    " ORDER BY ts DESC LIMIT 5000")
+                    " AND scope='world' ORDER BY ts DESC LIMIT 5000")
         self.days = max(1, min(WINDOW_DAYS,
                         len({int(r["ts"]) // 86_400_000 for r in rows}) or 1))
         self._hour = [0] * 24

@@ -14,7 +14,7 @@ from gits.core.scope import self_of
 
 #: 属于「内容」的事件类型。机制不在这里面。
 CONTENT_KINDS = ("seed", "persona", "drift", "attention", "inner",
-                 "consolidate", "funnel")
+                 "consolidate", "funnel", "place_name")
 
 
 def wipe(db: DB, *, actor: str = "her", now: int | None = None,

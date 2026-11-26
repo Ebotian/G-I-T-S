@@ -133,8 +133,14 @@ def pending(db: DB, *, limit: int = 3, actor: str = "her") -> list[dict]:
     return [dict(r) for r in db.q(
         "SELECT e.* FROM events e WHERE e.kind='msg_in'"
         " AND e.scope IN (" + marks + ")"
+        # 标记用**稳定身份**（source + ext_id），不用本地行号：
+        # 行号在各库之间不同，副本接管或导入之后对不上——
+        # 同一条输入会被当成两条，重答一次。
         " AND NOT EXISTS (SELECT 1 FROM events r WHERE r.kind='replied'"
-        "   AND r.ext_id = 'replied:' || e.id)"
+        "   AND r.ext_id = 'replied:' || e.source || ':' || e.ext_id)"
+        # 旧版写的是 'replied:<行号>'，也认——否则升级之后旧记录全部复活。
+        " AND NOT EXISTS (SELECT 1 FROM events r2 WHERE r2.kind='replied'"
+        "   AND r2.ext_id = 'replied:' || e.id)"
         " ORDER BY e.id LIMIT ?", (*vis, limit))]
 
 
@@ -250,7 +256,8 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
 
     # **回过了**——落成事件，不是靠 outbox 那行。重放会清空的只有投影。
     Writer(db).append_event(
-        source="ghost", kind="replied", ext_id=f"replied:{event['id']}",
+        source="ghost", kind="replied",
+        ext_id=f"replied:{event['source']}:{event['ext_id']}",
         ts=now, recv_ts=now, scope=event["scope"], payload=b"")
 
     # 溯源：这句话用了哪版人格、哪次调用（§3.1 可追溯）

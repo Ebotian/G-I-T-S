@@ -44,6 +44,7 @@ class DB:
         # events 库必须 FULL：断电最多丢最后一秒（DESIGN §11.8-5）
         self.conn.execute("PRAGMA synchronous=" + ("FULL" if durable else "NORMAL"))
         self._migrate()
+        self._backfill_replied()
 
     # ── 迁移 ───────────────────────────────────────────────
     def _migrate(self) -> None:
@@ -63,6 +64,34 @@ class DB:
             version = n
 
     # ── 便捷读 ─────────────────────────────────────────────
+    def _backfill_replied(self) -> None:
+        """升级回填：旧版发过回复但没有 replied 事件。
+
+        旧版判断"回没回过"靠 outbox 那一行；新版靠事件。升级之后，
+        旧记录没有事件 → 全部变回待回复 → 重答一遍。
+
+        这里从 outbox 回填**能确定的**那些：outbox 有 ref_event_id，
+        说明当时确实为那条消息生成过回复。结果不明的（没有 ref）不动。
+
+        标记用稳定身份（source + ext_id），和写入端一致；幂等。
+        """
+        try:
+            rows = self.q(
+                "SELECT o.ref_event_id AS rid, e.source AS src, e.ext_id AS ext,"
+                " e.scope AS scope, o.ts AS ts FROM outbox o"
+                " JOIN events e ON e.id = o.ref_event_id")
+        except Exception:
+            return                      # 表还没建好（全新库）
+        for r in rows:
+            try:
+                Writer(self).append_event(
+                    source="ghost", kind="replied",
+                    ext_id=f"replied:{r['src']}:{r['ext']}",
+                    ts=int(r["ts"] or 0), recv_ts=int(r["ts"] or 0),
+                    scope=str(r["scope"] or "world"), payload=b"")
+            except Exception:
+                continue
+
     def q(self, sql: str, args: Sequence[Any] = ()) -> list[sqlite3.Row]:
         return self.conn.execute(sql, args).fetchall()
 
