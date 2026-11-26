@@ -55,13 +55,13 @@ WEIGHT_KG_PER_YEAR: tuple[tuple[float, float, float], ...] = (
     (18, 999, 6.0),
 )
 
-#: 围度年变化上限（cm/年）。青春期在发育，成年后只随体重浮动。
-GIRTH_CM_PER_YEAR: tuple[tuple[float, float, float], ...] = (
-    (0, 10, 6.0),
-    (10, 18, 8.0),       # 青春期胸部/臀围的变化比身高更集中
-    (18, 25, 4.0),
-    (25, 999, 3.0),      # 成年后跟着体重走
-)
+#: 成年线。女性骨骺闭合大致 16-18 岁，取 18——到了这条线之后，
+#: **身体尺寸就认为不变**，任何改动都是数据错误，不是生活变化。
+GROWN_UP_AGE = 18.0
+
+#: 还会变的那段时间里，单次变化上限（cm）。
+#: 一周 1cm 已经很宽了：青春期突增最快的部位折算到周也在 0.3 上下。
+CHANGE_CAP_CM = 1.0
 
 #: 围度键。这些用同一张表判定。
 GIRTH_KEYS = frozenset({"bust_cm", "waist_cm", "hip_cm", "underbust_cm",
@@ -206,11 +206,14 @@ def bounded(db: DB, *, key: str, value: Any, now: int) -> tuple[bool, str]:
 
     a = age(db, now=now)
     if key == "height_cm":
-        limit = _per_week(GROWTH_CM_PER_YEAR, a, default=0.5, floor=0.3)
+        # 和围度同一个口径：会变的阶段上限 1cm，成年后认为不变。
+        # （年龄表仍然保留，它是给"为什么要这样"留的依据，不是判定本身。）
+        limit = 0.0 if (a is not None and a >= GROWN_UP_AGE)             else CHANGE_CAP_CM
     elif key == "weight_kg":
         limit = _per_week(WEIGHT_KG_PER_YEAR, a, default=2.0, floor=1.0)
     elif key in GIRTH_KEYS:
-        limit = _per_week(GIRTH_CM_PER_YEAR, a, default=1.5, floor=1.0)
+        # 会变的阶段：上限 1cm；成年之后：认为不变。
+        limit = 0.0 if (a is not None and a >= GROWN_UP_AGE)             else CHANGE_CAP_CM
     else:
         limit = BOUNDS.get(key)
     if limit is None:

@@ -427,3 +427,50 @@ def test_头块里带上派生量(db) -> None:
     assert '"cup":"B"' in got, got
     assert '"bmi":19.1' in got, got
     assert '"shoe_cn":37' in got or '"shoe_cn":37.0' in got, got
+
+
+# ── 统一口径：会变的 ≤1cm，成年后不变 ───────────────────────
+
+
+def test_成长期围度最多变一厘米(db) -> None:
+    C.record(db, key="birth_date", value="2013-01-01", now=T0)      # 13 岁
+    C.record(db, key="bust_cm", value=80.0, now=T0)
+    ok, why = C.bounded(db, key="bust_cm", value=81.0, now=T0)
+    assert ok is True, why
+    ok, why = C.bounded(db, key="bust_cm", value=81.1, now=T0)
+    assert ok is False, why
+    assert "上限 1.00" in why
+
+
+def test_成年后围度认为不变(db) -> None:
+    """25 岁还能改胸围，那不是生活变化，是数据错。"""
+    C.record(db, key="birth_date", value="2001-01-01", now=T0)
+    C.record(db, key="waist_cm", value=62.0, now=T0)
+    ok, why = C.bounded(db, key="waist_cm", value=62.5, now=T0)
+    assert ok is False, why
+    assert "上限 0.00" in why
+
+
+def test_成年后身高认为不变(db) -> None:
+    C.record(db, key="birth_date", value="2001-01-01", now=T0)
+    C.record(db, key="height_cm", value=165.0, now=T0)
+    ok, why = C.bounded(db, key="height_cm", value=165.5, now=T0)
+    assert ok is False, why
+
+
+def test_成长期身高也最多一厘米(db) -> None:
+    C.record(db, key="birth_date", value="2013-01-01", now=T0)      # 13 岁
+    C.record(db, key="height_cm", value=155.0, now=T0)
+    ok, _ = C.bounded(db, key="height_cm", value=156.0, now=T0)
+    assert ok is True
+    ok, why = C.bounded(db, key="height_cm", value=156.2, now=T0)
+    assert ok is False, why
+
+
+def test_成年后连降也不许(db) -> None:
+    """单调仍然生效——不变就是不变，两个方向都不行。"""
+    C.record(db, key="birth_date", value="2001-01-01", now=T0)
+    C.record(db, key="height_cm", value=165.0, now=T0)
+    ok, why = C.bounded(db, key="height_cm", value=164.5, now=T0)
+    assert ok is False
+    assert "只能不降" in why or "上限 0.00" in why
