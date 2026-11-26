@@ -89,6 +89,11 @@ def dump_projection(db: DB) -> Projection:
     )
 
 
+def _day(ts: int) -> int:
+    """本地日序（+8 时区，和 facts / rhythm 一致）。"""
+    return (int(ts) + 8 * 3_600_000) // 86_400_000
+
+
 def fact_id(subject: str, key: str, now: int) -> str:
     """事实事件的稳定身份。**所有版本都算，因为每条版本都要落一次投影。**"""
     return f"fact-{subject}-{key}-{now}"
@@ -111,19 +116,45 @@ def apply_payload(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict) -> 
     nid = node_id_for(row["source"], row["ext_id"])
     scope = "self:her" if kind == "inner" else "world"
 
+    # 这条**消息自己**的情感强度 → 影响编码（存得多牢）。
+    # 注意不是「她此刻的心情」——那是检索的事（见 recall.py）。
+    from gits.memory.fsrs import arousal_boost
+
+    aff = payload.get("affect") if isinstance(payload, dict) else None
+    aff_angle = aff.get("angle") if isinstance(aff, dict) else None
+    aff_inten = aff.get("intensity") if isinstance(aff, dict) else None
+    s0 = arousal_boost(aff_inten)
+
     conn.execute(
-        "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
-        " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch,"
+        " affect_angle, affect_intensity)"
+        " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
         (nid, "episode" if kind == "msg_in" else "self", ts, scope,
-         1.0, 1.0, ts))
+         s0, 1.0, ts, aff_angle, aff_inten))
     conn.execute("INSERT INTO node_content(node_id, content, created_ts)"
                  " VALUES(?,?,?)", (nid, str(payload.get("summary", "")).strip(), ts))
 
     def touch(nid_: str, name: str) -> None:
         conn.execute(
-            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch)"
-            " VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
-            (nid_, "entity", ts, "world", 1.0, 1.0, ts))
+            "INSERT INTO nodes(id, kind, born_ts, scope, s, r, last_touch,"
+            " touch_day, touch_n)"
+            " VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+            (nid_, "entity", ts, "world", 1.0, 1.0, ts, _day(ts), 0))
+        # 同日重复：**确实巩固了一次**（w17/w18 的短期记忆项），
+        # 但它不算「独立重述」——两件事，两个参数，各管各的。
+        from gits.memory.fsrs import SHORT_TERM_CAP, same_day_boost
+
+        cur = conn.execute(
+            "SELECT touch_day, touch_n, s FROM nodes WHERE id=?", (nid_,)).fetchone()
+        day, n = _day(ts), 0
+        if cur is not None:
+            if cur[0] == day:
+                n = int(cur[1] or 0)
+            s_cur = float(cur[2] or 1.0)
+            new_s = min(s_cur * same_day_boost(n + 1), SHORT_TERM_CAP)
+            conn.execute(
+                "UPDATE nodes SET touch_day=?, touch_n=?, s=?, last_touch=?"
+                " WHERE id=?", (day, n + 1, new_s, ts, nid_))
         # **同一个实体不该攒一堆同样的内容行**。实测三条消息提到了同一个
         # 「消息」，于是 node_content 里躺着三份一模一样的文本——
         # 检索时它们会互相挤占名额，r 也算不准。

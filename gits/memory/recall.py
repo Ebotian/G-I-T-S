@@ -112,6 +112,27 @@ def recall(db: DB, query: str, *, actor: str, context: str = "",
             adjusted.append(Hit(node_id=h.node_id, score=h.score * mult,
                                 sim=h.sim, why=h.why))
         hits = sorted(adjusted, key=lambda h: -h.score)
+
+    # 心情一致性：**她此刻的分布**影响「现在想起什么」，
+    # 而「存得多牢」是编码时的事（extract → fsrs.arousal_boost）。
+    # 两者混在一起会形成回路：难过 → 记得更牢 → 想起更多 → 更难过。
+    from gits.memory.fsrs import MOOD_GAIN, mood_congruence
+    from gits.social.affect import distribution
+
+    mood = distribution(db, actor, now=now_ms)
+    if mood["cells"] and MOOD_GAIN > 0 and hits:
+        adjusted = []
+        for h in hits:
+            row = db.one("SELECT affect_angle, affect_intensity FROM nodes"
+                         " WHERE id=?", (h.node_id,))
+            cong = 0.0
+            if row is not None and row["affect_angle"]:
+                cong = mood_congruence(row["affect_angle"],
+                                       row["affect_intensity"], mood["cells"])
+            adjusted.append(Hit(node_id=h.node_id,
+                                score=h.score * (1.0 + MOOD_GAIN * cong),
+                                sim=h.sim, why=h.why))
+        hits = sorted(adjusted, key=lambda h: -h.score)
     out: list[Recalled] = []
     for h in hits:
         row = latest_content(db, h.node_id)

@@ -123,3 +123,96 @@ def build(times_ms: list[int], *, corrections: set[int] | None = None) -> Memory
     for i, t in enumerate(sorted(times_ms)):
         m.review(t, Rating.AGAIN if i in corrections else Rating.GOOD)
     return m
+
+
+# ── 情绪接进记忆：两个不同的东西，别混 ────────────────────────
+#
+#   事件自身的情感强度  →  影响**编码**（这条记忆存得多牢）
+#   她此刻的心情        →  影响**检索**（现在想起什么）
+#
+# 合在一起会形成回路：难过 → 难过的事记得更牢 → 更容易想起难过的事 → 更难过。
+# 这种回路跑几个月才显形，而那时候已经很难拆。
+
+#: 事件情感强度对稳定性的增益上限。AROUSAL_GAIN = 0 时完全退化成纯 FSRS。
+AROUSAL_GAIN = 0.5
+#: 心情一致性对检索打分的增益上限（只影响排序，不删候选）
+MOOD_GAIN = 0.3
+#: 同一天最多巩固到几倍（见 same_day_boost 的递减）
+SHORT_TERM_CAP = 4.0
+
+
+def short_term_factor() -> float:
+    """FSRS-5 的短期记忆项：S ′ = S · e^(w17·(g−3+w18))。
+
+    我们没有评分，就取 g=3（中性），于是它退化成常数：
+    e^(0.5034 × 0.6567) ≈ 1.39。**参数是社区拟合的，不是我们拍的。**
+    """
+    return math.exp(W[17] * (0.0 + W[18]))
+
+
+def same_day_boost(n: int) -> float:
+    """同一天第 n 次提到时的巩固倍数。
+
+    **递减**：第一次最有用，后面越来越小。心理学的说法是 session 内收益递减；
+    朴素的说法是——一个下午说三十遍同一件事，不会让它记得三十倍牢。
+
+        n=1  → ×1.39
+        n=2  → ×1.20
+        n=5  → ×1.08
+
+    没有这个的话，同日重复对稳定性**贡献为零**：
+    漏斗的复现数正确地不算它们（那是独立重述），
+    但「它确实被重复了一次」这件事也不该完全消失。
+    """
+    if n <= 0:
+        return 1.0
+    return 1.0 + (short_term_factor() - 1.0) / n
+
+
+def arousal_boost(intensity: int | None, *, gain: float = AROUSAL_GAIN) -> float:
+    """事件自身的情感强度 → 编码增益。强度 1/2/3 映射到 0/0.5/1。
+
+    这是心理学里最硬的一类结论（情绪唤醒增强巩固）。
+    **gain = 0 时精确等于纯 FSRS**——这是它唯一的验证方式。
+    """
+    if not intensity or gain <= 0:
+        return 1.0
+    ar = (max(1, min(3, int(intensity))) - 1) / 2.0
+    return 1.0 + gain * ar
+
+
+def mood_congruence(angle: str | None, intensity: int | None,
+                    cells: dict[tuple[str, int], float]) -> float:
+    """这条记忆的情感标签和**她此刻的分布**有多一致（0..1）。
+
+    用圆盘几何：角度差换算成余弦相似，强度差按比例。
+    对面（joy vs sadness）应当是 0，不是 1。
+    """
+    if not angle or not cells:
+        return 0.0
+    angles = _angles()
+    total = 0.0
+    for (a, i), p in cells.items():
+        if p <= 0:
+            continue
+        far = _angle_distance(str(angle), a, angles)
+        level = abs(int(intensity) - int(i)) / 2.0
+        # 同一个角度同一个强度 → 1；对面、强度相差两档 → 0
+        total += p * max(0.0, 1.0 - 0.5 * far - 0.5 * level)
+    return min(1.0, total)
+
+
+def _angles() -> tuple[str, ...]:
+    from gits.social.affect import ANGLES
+
+    return ANGLES
+
+
+def _angle_distance(a: str, b: str, angles: tuple[str, ...]) -> float:
+    """圆盘上的最短角距，归一化到 0..1（0=同一个角，1=对面）。"""
+    if a not in angles or b not in angles:
+        return 1.0
+    i, j = angles.index(a), angles.index(b)
+    n = len(angles)
+    d = abs(i - j) % n
+    return (min(d, n - d)) / (n / 2)
