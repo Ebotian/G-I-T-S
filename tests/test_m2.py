@@ -110,7 +110,7 @@ def test_样本太少时不给数() -> None:
     assert elicitation_ratio(her, his) is None
 
 
-def test_开口判据里没有运维姿态(db) -> None:
+def test_开口判据里没有运维姿态() -> None:
     """进程的运行时状态（DRAINING/DOWN）属于调度，不属于「该不该开口」。
 
     以前这里有一道 `phase_allows`，默认恒为 True——**一票空票**。
