@@ -123,8 +123,13 @@ def test_开口判据里没有运维姿态() -> None:
 
     from gits.speech import gate as G
 
-    assert "DREAMING" not in inspect.getsource(G)
-    assert "DORMANT" not in inspect.getsource(G)
+    # 只看代码里的**用法**，不看注释：注释里提到它俩是故意的（解释为什么删）。
+    # 想钉的是「不再有这道判据」，所以查属性名在 GateInputs 上的出现。
+    src = inspect.getsource(G)
+    code = "\n".join(ln for ln in src.splitlines()
+                      if not ln.lstrip().startswith("#"))
+    assert "i.phase_allows" not in code
+    assert "if not i.phase" not in code
 
 
 def test_通道不在时仍然不开口() -> None:
