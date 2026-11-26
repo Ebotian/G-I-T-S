@@ -102,11 +102,12 @@ def relation(db: DB, *, now: int, actor: str = "her") -> RelationSnapshot:
         " WHERE n.kind='entity' ORDER BY n.last_touch DESC LIMIT 3"))
     from gits.social.affect import line as affect_line
     from gits.speech.style import line as style_line
-    from gits.world import amap, loc
+    from gits.world import amap, loc, places
 
-    # 外面这一行：他在哪（城市级）+ 那里的天气。空的部分不出现。
-    world = "\n".join(filter(None, (loc.line(db, now=now),
-                                    amap.line(db, now=now))))
+    # 外面这一行：他在哪 + 那里的天气。空的部分不出现。
+    # 场所**有名字**才说场所，没名字退回城市——不自动命名，所以大多数时候是城市。
+    where = places.line(db, now=now) or loc.line(db, now=now)
+    world = "\n".join(filter(None, (where, amap.line(db, now=now))))
 
     return RelationSnapshot(
         bucket=bucket(now),
@@ -167,9 +168,12 @@ def respond(db: DB, event: dict, *, persona: PersonaSeed | None = None,
     mood = affect_dist(db, actor, now=now)
     hits = allocate(db, wide, slots=SLOTS, arousal=mood["arousal"])
     from gits.speech.facts import lines as fact_lines
+    from gits.world import forecast as fc
 
+    # C 段的日子：生日这类记录 + 窗口内的预报。**两类都是记录，不是读数。**
+    due = tuple(fact_lines(db, now)) + tuple(fc.lines(db, now))
     ctx = TurnContext(stimulus=text, recent=history, recalled=lines(hits),
-                      due=fact_lines(db, now))
+                      due=due)
     # 只要 A 段的哈希（用于 influence 溯源），不必再跑一遍完整装配——
     # 两套装配并存过一段时间，固定事实就是从它们的缝里漏掉的。
     a_hash = render_a(seed)

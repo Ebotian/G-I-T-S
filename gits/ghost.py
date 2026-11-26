@@ -229,6 +229,21 @@ class Ghost:
 
         adcode = loc.adcode(self.db, now=t) or adcode
         got = amap.maybe(self.db, now=t, key=key, adcode=adcode)
+        # 预报是**记录**，不是读数：有效到明天，所以按小时取一次就够。
+        from gits.world import forecast as fc
+
+        if got:
+            try:
+                fc.record(self.db, fc.fetch(adcode, key=key), now=t)
+            except Exception:
+                pass
+        # 学出来的东西增量学：游标之后才算，重复调用不重复计数。
+        from gits.world import places
+
+        try:
+            places.learn(self.db)
+        except Exception:
+            pass
         return (got or {}).get("weather", "") if got else ""
 
     def night(self, t: int | None = None) -> str:

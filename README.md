@@ -81,3 +81,4 @@ python -m synth build --scenario drift --days 60 --out var/synth/drift60
 - [`docs/research/convergent.md`](docs/research/convergent.md) — 共同被独立实现的机制：八条不变式、各自破过的地方、怎么防止被改回去
 - [`docs/research/amap.md`](docs/research/amap.md) — 外面的世界：读数是第三类东西（不是事件、不是记录）、位置是配置不是 IP 猜的
 - [`docs/research/space.md`](docs/research/space.md) — 空间源：手机在 CGNAT 后面所以只能手机推、四个只有真装才暴露的坑、坐标换标签才出门
+- [`docs/research/prediction.md`](docs/research/prediction.md) — 两类预测：外部给的（记录）vs 自己学的（概率）；耦合是加先验不是加维度
