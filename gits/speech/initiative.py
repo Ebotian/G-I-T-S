@@ -56,32 +56,21 @@ def spoken(db: DB, *, actor: str = "her") -> list[int]:
         " ORDER BY ts DESC LIMIT 40", (f"self:{actor}",))]
 
 
-def online(db: DB, *, ts: int) -> float:
-    """那一刻他大概在线的概率。**先问模型，没有模型就退到粗估。**
+def online(db: DB, *, ts: int, snap: Any = None) -> float:
+    """那一刻他大概在线的概率。
 
-    粗估不需要拟合：这个小时在过去出现过多少消息，除以最忙的那个小时。
-    一点数据都没有就返回 0.5——**空白既不是"一定在"也不是"一定不在"**。
+    用 `time/activity`：5 分钟细桶收缩到小时先验——空的地方成片，
+    它们退回小时估计，不发明精度；有数据的地方才有自己的分辨率。
+
+    `presence_rate`（夜里的泊松 GLM）是另一条路，但它现在在生产上从没成功过
+    （`presence_model` 缺 `params` 列，异常被吞），所以不再假装先问它。
     """
-    from gits.time import presence_rate
+    from gits.time import activity
 
-    try:
-        return max(0.0, min(1.0, float(presence_rate(db, ts))))
-    except Exception:
-        pass
-    rows = db.q("SELECT ts FROM events WHERE kind='msg_in'"
-                " ORDER BY ts DESC LIMIT 2000")
-    if not rows:
-        return 0.5
-    import datetime as dt
-
-    buckets = [0] * 24
-    for r in rows:
-        buckets[dt.datetime.fromtimestamp(int(r["ts"]) / 1000).hour] += 1
-    hour = dt.datetime.fromtimestamp(ts / 1000).hour
-    return buckets[hour] / (max(buckets) or 1)
+    return activity.at(db, ts, now=ts, snap=snap)
 
 
-def opportunity(db: DB, *, start: int, end: int) -> float:
+def opportunity(db: DB, *, start: int, end: int, snap: Any = None) -> float:
     """[start, end] 之间他大概闲了几个小时。**压力的原材料，也是欠账的原材料。**
 
     按小时切、按当时的在线概率加权。两个量用的是同一个积分——
@@ -94,12 +83,13 @@ def opportunity(db: DB, *, start: int, end: int) -> float:
     t = start
     while t < end:
         span = min(hour, end - t) / float(hour)
-        acc += online(db, ts=t) * span
+        acc += online(db, ts=t, snap=snap) * span
         t += hour
     return acc
 
 
-def pressure(db: DB, *, now: int, actor: str = "her") -> float:
+def pressure(db: DB, *, now: int, actor: str = "her",
+             snap: Any = None) -> float:
     """攒了多少"闲的时间"。0 = 刚说过，1 = 攒满。
 
     **积的是他可能闲着的时长，不是墙钟。** 一小时一小时地累加，
@@ -113,12 +103,13 @@ def pressure(db: DB, *, now: int, actor: str = "her") -> float:
     start = last[0]
     if now <= start:
         return 0.0
-    acc = opportunity(db, start=start, end=now)
+    acc = opportunity(db, start=start, end=now, snap=snap)
     return max(0.0, min(1.0, acc / IDLE_HOURS_FULL))
 
 
 def unanswered(db: DB, *, now: int, actor: str = "her",
-               window: int = REPLY_WINDOW_MS) -> tuple[float, float]:
+               window: int = REPLY_WINDOW_MS,
+               snap: Any = None) -> tuple[float, float]:
     """没收到回复的累积惩罚。返回 (惩罚系数, 加权次数)。
 
     **允许重发**，但每欠一次就乘一个 (1 - UNREPLIED_WEIGHT * 在线概率)。
@@ -136,7 +127,8 @@ def unanswered(db: DB, *, now: int, actor: str = "her",
             continue
         # **欠账也是那个积分**：说完之后他闲了几个小时。
         # 归一化到 REPLY_HORIZON——他闲够两个钟头还没回，就算整笔欠下。
-        idle = opportunity(db, start=ts, end=min(now, ts + window))
+        idle = opportunity(db, start=ts, end=min(now, ts + window),
+                           snap=snap)
         debt = min(1.0, idle / REPLY_HORIZON_HOURS)
         factor *= max(0.0, 1.0 - UNREPLIED_WEIGHT * debt)
         weight += debt

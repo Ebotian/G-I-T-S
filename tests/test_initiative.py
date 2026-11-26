@@ -208,7 +208,7 @@ def test_欠账要归一化_一直在也不该无限罚(db, monkeypatch) -> None
     """他整六小时都在线却没回，和他在线一小时没回，罚应该一样重——
     **归一化到 REPLY_HORIZON，不是越长欠越多。** 否则久了会把话说死。"""
     _busy(db)
-    monkeypatch.setattr(I, "online", lambda db, ts: 1.0)
+    monkeypatch.setattr(I, "online", lambda db, ts, snap=None: 1.0)
     said = int(dt.datetime(2026, 11, 26, 1, 0).timestamp() * 1000)
     I.record(db, now=said, reason="x", candidate=None)
     _factor, weight = I.unanswered(db, now=said + 8 * HOUR)
