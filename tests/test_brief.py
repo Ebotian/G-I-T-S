@@ -133,23 +133,23 @@ def test_装配不直接碰世界模块() -> None:
     assert "brief_text" in src, "装配应该只认这一个入口"
 
 
-def test_详细走分类工具() -> None:
+def test_详细走分类工具(db) -> None:
     """详细的走工具，按类取。未知分类返回空，不抛。"""
-    from gits.world import catalog, detail
+    from gits.world import catalog
 
-    names = [c["name"] for c in catalog()]
-    assert {"where", "outside", "place", "self"} <= set(names)
-    for c in catalog():
+    names = [c["name"] for c in catalog(db, now=T0, proactive=True)]
+    assert {"where", "outside", "place", "self", "name_place"} <= set(names)
+    for c in catalog(db, now=T0, proactive=True):
         assert c.get("about"), f"{c['name']} 没有作用说明"
 
 
 def test_工具目录是分类不是一个大接口(db) -> None:
     from gits.world import catalog, detail
 
-    for t in catalog():
-        got = detail(db, t["name"], now=T0)
+    for t in catalog(db, now=T0, proactive=True):
+        got = detail(db, t["name"], now=T0, proactive=True)
         assert isinstance(got, dict), t["name"]
-    assert detail(db, "不存在的分类", now=T0) == {}
+    assert detail(db, "不存在的分类", now=T0, proactive=True) == {}
 
 
 # ── 拼接规则：只在新开上下文时出现一次 ──────────────────────
@@ -174,3 +174,95 @@ def test_loc_是地点不是城市(db) -> None:
     text = brief_text(db, now=T0)
     assert '"loc":"公司"' in text
     assert "温州市" not in text
+
+
+# ── 节奏闸：高频对话不许调工具 ──────────────────────────────
+
+
+def _msgs(db: DB, gaps_ms: list[int], *, start: int = T0) -> None:
+    t = start
+    with Writer(db).txn() as c:
+        for i, g in enumerate(gaps_ms):
+            t += g
+            c.execute("INSERT INTO events(ts, recv_ts, source, kind, ext_id,"
+                      " payload, lag, ts_trust, scope) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (t, t, "shell", "msg_in", f"m{i}", b"hi", 0, 1, "world"))
+
+
+def test_高频对话禁用工具(db) -> None:
+    """一句接一句的时候，多等一个来回就是"卡住了"。"""
+    from gits.speech import pacing
+
+    # 平时十分钟一条，最近四条半分钟一条
+    _msgs(db, [600_000] * 40 + [30_000] * 4)
+    fast, why = pacing.is_fast(db, now=T0 + 40 * 600_000 + 4 * 30_000 + 5_000)
+    assert fast, why
+    assert pacing.tools_allowed(db, now=T0 + 40 * 600_000 + 120_000)[0] is False
+
+
+def test_低频对话允许工具(db) -> None:
+    from gits.speech import pacing
+
+    _msgs(db, [600_000] * 40)
+    now = T0 + 40 * 600_000 + 20 * 60_000
+    assert pacing.tools_allowed(db, now=now)[0] is True
+
+
+def test_主动开口永远允许(db) -> None:
+    """主动开口没有人在等，等一下不突兀。"""
+    from gits.speech import pacing
+
+    _msgs(db, [600_000] * 40 + [30_000] * 4)
+    now = T0 + 40 * 600_000 + 4 * 30_000
+    assert pacing.tools_allowed(db, now=now, proactive=True)[0] is True
+
+
+def test_样本不足时不误判(db) -> None:
+    """没数据就一律禁用，是最糟的默认值。"""
+    from gits.speech import pacing
+
+    _msgs(db, [60_000, 60_000])
+    assert pacing.is_fast(db, now=T0 + 999_999)[0] is False
+
+
+# ── 她的命名入口 ────────────────────────────────────────────
+
+
+def test_她能给地方起名字(db) -> None:
+    from gits.world import places
+
+    pid = _fill(db, name=None)
+    ev = places.name(db, place_id=pid, alias="公司", now=T0)
+    assert ev is not None
+    assert places.aliases(db, pid) == ["公司"]
+    b = B.build(db, now=T0)
+    assert b["loc"] == "公司", "起了名字之后背景块该用它"
+
+
+def test_名字可以有多个且确定(db) -> None:
+    from gits.world import places
+
+    pid = _fill(db, name=None)
+    places.name(db, place_id=pid, alias="公司", now=T0)
+    places.name(db, place_id=pid, alias="单位", now=T0 + 1000)
+    assert places.aliases(db, pid) == ["公司", "单位"]
+    assert places.name_of({"id": pid}, db) == "公司", "主叫法要确定"
+
+
+def test_名字走事件能重放(db) -> None:
+    from gits.core import project
+    from gits.world import places
+
+    pid = _fill(db, name=None)
+    places.name(db, place_id=pid, alias="公司", now=T0)
+    project.restore(db)
+    # 重放会清投影表；place_name 事件必须把它重建出来
+    assert places.aliases(db, pid) == ["公司"]
+
+
+def test_空名字和不合法名字被拒(db) -> None:
+    from gits.world import places
+
+    pid = _fill(db, name=None)
+    assert places.name(db, place_id=pid, alias="   ", now=T0) is None
+    assert places.name(db, place_id=pid, alias="很长" * 20, now=T0) is None

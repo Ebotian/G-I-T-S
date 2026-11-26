@@ -36,15 +36,24 @@ def brief_text(db: DB, *, now: int, actor: str = "her",
     return body
 
 
-def catalog() -> tuple[dict, ...]:
-    """分类目录：[(名字, 作用)]。给模型看的工具清单。"""
+def catalog(db: DB, *, now: int, proactive: bool = False) -> tuple[dict, ...]:
+    """分类目录：[(名字, 作用)]。**高频对话时返回空**——这是策略生效的地方。"""
+    from gits.speech import pacing
     from gits.world import tools as _t
 
+    ok, _why = pacing.tools_allowed(db, now=now, proactive=proactive)
+    if not ok:
+        return ()
     return tuple({"name": t["name"], "about": t["about"]} for t in _t.CATALOG)
 
 
-def detail(db: DB, kind: str, *, now: int, **kw) -> dict:
-    """某一类的详细。"""
+def detail(db: DB, kind: str, *, now: int, proactive: bool = False,
+           **kw) -> dict:
+    """某一类的详细。**高频对话时一律空**——纵深防御，不指望调用方自觉。"""
+    from gits.speech import pacing
     from gits.world import tools as _t
 
+    ok, _why = pacing.tools_allowed(db, now=now, proactive=proactive)
+    if not ok:
+        return {}
     return _t.detail(db, kind, now=now, **kw)

@@ -51,6 +51,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             f"A 段={'空（不会说话）' if a is None else 'v' + str(a['version'])}\n"
             f"内容={json.dumps(state, ensure_ascii=False) if state else '{}（干净）'}"
         )
+        # **静默失败要显示。** 后台那几个 except 以前是哑的：
+        # 天气挂了三天，系统表现得完全正常，只是从不出声。
+        faults = db.q("SELECT ts, payload FROM events WHERE kind='fault'"
+                      " ORDER BY id DESC LIMIT 3")
+        if faults:
+            print("故障（最近三条）:")
+            for f in faults:
+                when = __import__("datetime").datetime.fromtimestamp(
+                    int(f["ts"]) / 1000).strftime("%m-%d %H:%M")
+                print(f"  {when}  {(f['payload'] or b'').decode('utf-8', 'replace')}")
         cur = cursor(db, "cloud")
         if cur:
             print("sync_cursor=" + json.dumps(cur, ensure_ascii=False))

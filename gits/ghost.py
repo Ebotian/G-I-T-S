@@ -213,6 +213,23 @@ class Ghost:
             drive_update(self.db, "her", now=t)
         return did
 
+    def fault(self, where: str, exc: BaseException, *, now: int) -> None:
+        """**静默失败要显示。**
+
+        以前这里写的是 `except Exception: pass`——天气挂了三天，
+        系统表现得完全正常，只是从不出声。现在每次失败落一条事件
+        （按小时去重，不会刷屏），`gits status` 会显示。
+        """
+        try:
+            self.w.append_event(
+                source="self", kind="fault",
+                ext_id=f"fault:{where}:{now // 3_600_000}",
+                ts=now, recv_ts=now,
+                payload=(where + ": " + type(exc).__name__ + ": "
+                         + str(exc))[:300].encode())
+        except Exception:
+            pass                    # 记失败本身不能再失败
+
     # ── 外面的世界 ──
     def world(self, t: int | None = None) -> str:
         """取一次外面的读数。**没有天气是正常状态**，不抛、不重试。"""
@@ -235,15 +252,15 @@ class Ghost:
         if got:
             try:
                 fc.record(self.db, fc.fetch(adcode, key=key), now=t)
-            except Exception:
-                pass
+            except Exception as exc:
+                self.fault("forecast", exc, now=t)
         # 学出来的东西增量学：游标之后才算，重复调用不重复计数。
         from gits.world import places
 
         try:
             places.learn(self.db)
-        except Exception:
-            pass
+        except Exception as exc:
+            self.fault("places", exc, now=t)
         return (got or {}).get("weather", "") if got else ""
 
     def night(self, t: int | None = None) -> str:

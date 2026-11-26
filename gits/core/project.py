@@ -244,6 +244,21 @@ def _apply(conn: sqlite3.Connection, row: sqlite3.Row, response: str) -> None:
                      (float(obj["s"]), obj.get("d"),
                       int(obj.get("ts") or row["ts"]), nid))
         return
+    if row["kind"] == "place_name":
+        # 她给一个地方起了名字。**标注不是学出来的**，但同样走事件，
+        # 这样重放能重建、wipe 能清掉、也能追到是谁什么时候说的。
+        try:
+            obj = json.loads(response)
+        except json.JSONDecodeError:
+            return
+        pid, alias = obj.get("place_id"), (obj.get("alias") or "").strip()
+        if not pid or not alias or len(alias) > 24:
+            return
+        conn.execute("INSERT INTO place_alias(place_id, alias, src, ts)"
+                     " VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+                     (int(pid), alias, str(obj.get("src") or "her"),
+                      int(row["ts"])))
+        return
     if row["kind"] == "alias":
         # 实体别名：查图时先把别名展开成同一族（semantic.family）。
         try:
@@ -382,7 +397,7 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
 
     sql = ("SELECT * FROM events WHERE kind IN"
            " ('msg_in','inner','consolidate','persona','funnel','seed','fact',"
-           "  'alias','reinforce')")
+           "  'alias','reinforce','place_name')")
     args: list[object] = []
     if until_event_id is not None:
         sql += " AND id <= ?"
@@ -402,7 +417,8 @@ def restore(db: DB, *, until_event_id: int | None = None) -> int:
             # 整理事件自带内容；其余类型才需要模型结果。
             response = (row["payload"].decode("utf-8", "replace")
                         if row["kind"] in ("consolidate", "persona", "funnel",
-                                           "seed", "fact", "alias", "reinforce")
+                                           "seed", "fact", "alias", "reinforce",
+                                           "place_name")
                         else calls.get(row["id"]))
             if response is None:
                 raise MissingModelResult(

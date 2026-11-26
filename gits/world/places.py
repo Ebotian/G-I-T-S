@@ -234,11 +234,50 @@ def real_places(db: DB) -> list[dict]:
     return [p for p in all_places(db) if counts_as_place(p)]
 
 
-def name_of(p: dict | None) -> str:
-    """没用名字的场所只能这么叫。**不猜。**"""
+def aliases(db: DB, pid: int) -> list[str]:
+    """一个地方可以有多个叫法。按（时间, 名字）排序，**确定性**。"""
+    return [str(r["alias"]) for r in db.q(
+        "SELECT alias FROM place_alias WHERE place_id=? ORDER BY ts, alias", (pid,))]
+
+
+def name_of(p: dict | None, db: DB | None = None) -> str:
+    """主叫法：最早给的那个。**不猜——没有就是空。**"""
     if not p:
         return ""
+    if db is not None:
+        got = aliases(db, int(p["id"]))
+        if got:
+            return got[0]
     return (p.get("name") or "").strip()
+
+
+def name(db: DB, *, place_id: int, alias: str, src: str = "her",
+         now: int) -> int | None:
+    """给一个地方起名字。**落事件**，不是直接改表。
+
+    名字是标注不是学习结果，但它同样得可追溯：谁什么时候说的、能不能重放。
+    """
+    alias = (alias or "").strip()
+    if not alias or len(alias) > 24:
+        return None
+    import json
+
+    from gits.core.db import Writer
+
+    body = json.dumps({"place_id": int(place_id), "alias": alias, "src": src},
+                      ensure_ascii=False)
+    ev, created = Writer(db).append_event(
+        source="self", kind="place_name", ext_id=f"place_name:{place_id}:{alias}",
+        ts=now, recv_ts=now, payload=body.encode())
+    if created:
+        # 实时也要落投影。只写事件的话，要等到下一次 replay 才生效——
+        # 中间那段时间背景块里的 loc 还是占位词。
+        from gits.core import project
+
+        row = db.one("SELECT * FROM events WHERE id=?", (ev,))
+        with Writer(db).txn() as c:
+            project._apply(c, row, body)
+    return ev
 
 
 def line(db: DB, *, now: int) -> str:

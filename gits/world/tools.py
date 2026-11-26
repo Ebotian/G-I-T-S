@@ -29,13 +29,13 @@ def _where(db: DB, *, now: int, days: int = 1, **_: Any) -> dict[str, Any]:
     for p in places.real_places(db):
         hours = places.profile(db, int(p["id"]))
         out.append({
-            "place": places.name_of(p) or None,
+            "place": places.name_of(p, db) or None,
             "n": int(p["n"]),
             "stay_min": int(p["best_dwell_ms"] / 60_000),
             "hours": [h for h, c in enumerate(hours) if c > 0][:12],
         })
     cur = places.current(db)
-    return {"now": (places.name_of(cur) or None) if cur else None,
+    return {"now": (places.name_of(cur, db) or None) if cur else None,
             "places": out[:8]}
 
 
@@ -72,13 +72,13 @@ def _place(db: DB, *, now: int, place_id: int | None = None,
     for p in places.all_places(db):
         if place_id is not None and int(p["id"]) == int(place_id):
             target = p
-        elif name and places.name_of(p) == name:
+        elif name and places.name_of(p, db) == name:
             target = p
     if target is None:
         return {}
     hours = places.profile(db, int(target["id"]))
     return {
-        "name": places.name_of(target) or None,
+        "name": places.name_of(target, db) or None,
         "n": int(target["n"]),
         "best_stay_min": int(target["best_dwell_ms"] / 60_000),
         "last_seen": int(target["last_ts"]),
@@ -97,6 +97,27 @@ def _self(db: DB, *, now: int, actor: str = "her", **_: Any) -> dict[str, Any]:
             "n": round(float(d.get("n") or 0), 1)}
 
 
+def _name_place(db: DB, *, now: int, place_id: int | None = None,
+                alias: str = "", **_: Any) -> dict[str, Any]:
+    """**她的命名/写入口。** 给一个地方起名字。
+
+    名字是标注不是学习结果，所以它允许被写——但仍然走事件，可重放、可清。
+    没有 place_id 时作用在"他现在所在的那个地方"上。
+    """
+    from gits.world import places
+
+    if place_id is None:
+        cur = places.current(db)
+        if cur is None:
+            return {"ok": False, "why": "不知道在哪个地方"}
+        place_id = int(cur["id"])
+    ev = places.name(db, place_id=int(place_id), alias=alias, src="her", now=now)
+    if ev is None:
+        return {"ok": False, "why": "名字不合法（空或超过 24 字）"}
+    return {"ok": True, "place_id": int(place_id),
+            "alias": alias.strip(), "event": ev}
+
+
 #: 工具目录。**分类是给模型看的**，所以每个都带一句人话的作用说明。
 CATALOG: tuple[dict[str, Any], ...] = (
     {"name": "where", "run": _where,
@@ -107,6 +128,8 @@ CATALOG: tuple[dict[str, Any], ...] = (
      "about": "某个地方的情况（需要 place_id 或名字）"},
     {"name": "self", "run": _self,
      "about": "她自己此刻的情绪分布"},
+    {"name": "name_place", "run": _name_place,
+     "about": "给一个地方起名字（她的写入口；不传 place_id 就是他现在所在的地方）"},
 )
 
 _BY_NAME: dict[str, Callable[..., dict]] = {t["name"]: t["run"] for t in CATALOG}

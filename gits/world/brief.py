@@ -71,7 +71,7 @@ def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
     # **具体地点，不是城市。** 城市对聊天没有用——"你在温州"不构成任何话题；
     # "你在公司"才有。没有别名就给占位词，让模型知道这件事可以问。
     if cur:
-        out["loc"] = places.name_of(cur) or PLACEHOLDER
+        out["loc"] = places.name_of(cur, db) or PLACEHOLDER
 
     w = amap.latest(db, now=now)
     if w and not amap._stale(w, now=now, ttl=amap.FRESH_MS):
@@ -97,7 +97,7 @@ def build(db: DB, *, now: int, actor: str = "her") -> dict[str, Any]:
         if hits > best_n:
             best, best_n = p, hits
     if best is not None and best_n >= 3:
-        name = places.name_of(best)
+        name = places.name_of(best, db)
         if name and name != out.get("loc"):
             out["usual"] = name
 
