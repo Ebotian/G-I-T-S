@@ -263,6 +263,16 @@ def cmd_character(args: argparse.Namespace) -> int:
         if not ok:
             print(f"  拒收：{why}")
             return 2
+        # **跨字段自洽。** 手工写入是唯一能一次塞进一整组数字的入口，
+        # 也正是不自洽最容易进来的地方（导入、粘贴）。
+        trial = dict(C.current(db))
+        trial[args.key] = str(args.value)
+        bad = C.problems(trial, now=now)
+        if bad:
+            print("  拒收：这套数字自相矛盾")
+            for b in bad:
+                print(f"    · {b}")
+            return 2
         ev = C.record(db, key=args.key, value=args.value, src="user", now=now)
         print(f"  {'记下了' if ev else '没记（键不在白名单里）'}：{args.key}={args.value}")
         return 0 if ev else 2

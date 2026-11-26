@@ -307,3 +307,123 @@ def test_周更不许改生日(db, monkeypatch) -> None:
     assert "birth_date" not in changed
     assert C.current(db)["birth_date"] == "1999-11-30"
     assert C.age(db, now=T0) == 26, "年龄跟着生日一起变了"
+
+
+# ── 派生量与自洽检查 ────────────────────────────────────────
+
+
+def _body(db: DB, **kw) -> None:
+    for k, v in kw.items():
+        C.record(db, key=k.replace("_v", ""), value=v, now=T0)
+
+
+def test_派生量算得出来(db) -> None:
+    _body(db, birth_date="1999-11-30", height_cm=165, weight_kg=52,
+          bust_cm=86, underbust_cm=75, waist_cm=62, hip_cm=90,
+          inseam_cm=78, foot_cm=23.5)
+    d = C.derived(db, now=T0)
+    assert d["bmi"] == 19.1
+    assert d["cup"] == "B", d           # 86-75 = 11 -> B
+    assert d["band"] == 75
+    assert d["whr"] == pytest.approx(0.689, abs=0.01)
+    assert d["leg_ratio"] == pytest.approx(0.473, abs=0.01)
+    assert d["shoe_cn"] == 37.0
+
+
+def test_派生量不落库(db) -> None:
+    _body(db, height_cm=165, weight_kg=52)
+    before = db.scalar("SELECT count(*) FROM events WHERE kind='character'")
+    C.derived(db, now=T0)
+    after = db.scalar("SELECT count(*) FROM events WHERE kind='character'")
+    assert before == after, "派生量写进库了"
+
+
+def test_自洽的身材没有意见(db) -> None:
+    _body(db, height_cm=165, weight_kg=52, bust_cm=86, underbust_cm=75,
+          waist_cm=62, hip_cm=90, shoulder_cm=38, inseam_cm=78)
+    assert C.problems(now=T0, db=db) == []
+
+
+def test_胸围小于下胸围会被指出(db) -> None:
+    _body(db, bust_cm=80, underbust_cm=85)
+    assert any("互换" in p for p in C.problems(now=T0, db=db))
+
+
+def test_腰围大于臀围会被指出(db) -> None:
+    _body(db, waist_cm=95, hip_cm=90)
+    assert any("不小于臀围" in p for p in C.problems(now=T0, db=db))
+
+
+def test_BMI_不合理会被指出(db) -> None:
+    """身高 165、体重 95 —— 每个单看都不离谱，合起来不可能。"""
+    _body(db, height_cm=165, weight_kg=95)
+    assert any("BMI" in p for p in C.problems(now=T0, db=db))
+
+
+def test_肩宽与身高不匹配会被指出(db) -> None:
+    _body(db, height_cm=165, shoulder_cm=50)
+    assert any("肩宽" in p for p in C.problems(now=T0, db=db))
+
+
+def test_腿身比不合理会被指出(db) -> None:
+    _body(db, height_cm=165, inseam_cm=60)
+    assert any("内缝长" in p for p in C.problems(now=T0, db=db))
+
+
+def test_周更会跑自洽检查(db, monkeypatch) -> None:
+    """**这条只能验到"检查被调用"，验不到规则本身。**
+
+    原因值得记：每字段的周上限是 ±1.5cm 量级，所以**一步之内几乎不可能**
+    由合法的单字段变化凑出一个跨字段矛盾。跨字段检查真正守的是
+    一次塞进一整组的入口——导入和手工写入。"""
+    from gits.speech.llm import Reply
+    from gits.ghost import Ghost
+    from gits.memory import character as C2
+
+    _body(db, birth_date="1999-11-30", height_cm=165, weight_kg=52)
+    sunday = int(dt.datetime(2026, 11, 29, 21, 0).timestamp() * 1000)
+    called = []
+    monkeypatch.setattr(C2, "problems",
+                        lambda *a, **k: called.append(1) or ["假的矛盾"])
+    monkeypatch.setattr(
+        "gits.speech.llm.chat",
+        lambda *a, **k: Reply(text='{"weight_kg": 52.3}', model="stub",
+                              usage={}, latency_ms=1))
+    changed = Ghost(db).character_weekly(sunday)
+    assert called, "周更没有跑自洽检查"
+    assert changed == "", "检查说有矛盾，还是收下了"
+    assert C2.current(db)["weight_kg"] == "52"
+
+
+def test_手工写入不自洽就拒(db) -> None:
+    """一次塞进一整组的入口：粘贴、导入。这里才是跨字段检查的用武之地。"""
+    from gits.cli import cmd_character
+    import argparse
+
+    C.record(db, key="bust_cm", value=80, now=T0)
+    args = argparse.Namespace(db=str(db.path), key="underbust_cm",
+                              value="85")
+    assert cmd_character(args) == 2
+    assert "underbust_cm" not in C.current(db)
+
+
+def test_胸围差超出范围会被指出(db) -> None:
+    """胸围大于下胸围，但差得离谱——这两个数不是互换，是其中一个错。"""
+    _body(db, bust_cm=110, underbust_cm=70)      # 差 40，超过 30 的包络
+    assert any("胸围差" in p for p in C.problems(now=T0, db=db))
+
+
+def test_腰臀比超出范围会被指出(db) -> None:
+    """腰比臀小，但比例不可能——同样是"每个都像，合起来不像"。"""
+    _body(db, waist_cm=55, hip_cm=92)            # 0.598，低于 0.62
+    assert any("腰臀比" in p for p in C.problems(now=T0, db=db))
+
+
+def test_头块里带上派生量(db) -> None:
+    """她知道自己 75B，比知道自己胸围 86 更自然。"""
+    _body(db, height_cm=165, weight_kg=52, bust_cm=86, underbust_cm=75,
+          waist_cm=62, hip_cm=90, foot_cm=23.5)
+    got = C.line(db, now=T0)
+    assert '"cup":"B"' in got, got
+    assert '"bmi":19.1' in got, got
+    assert '"shoe_cn":37' in got or '"shoe_cn":37.0' in got, got

@@ -64,7 +64,8 @@ GIRTH_CM_PER_YEAR: tuple[tuple[float, float, float], ...] = (
 )
 
 #: 围度键。这些用同一张表判定。
-GIRTH_KEYS = frozenset({"bust_cm", "waist_cm", "hip_cm", "underbust_cm"})
+GIRTH_KEYS = frozenset({"bust_cm", "waist_cm", "hip_cm", "underbust_cm",
+                        "shoulder_cm", "inseam_cm"})
 
 #: 没有年龄可依的键，用固定上限兜底。
 BOUNDS: dict[str, float] = {}
@@ -77,8 +78,17 @@ MONOTONIC = frozenset({"height_cm"})
 #: **只放可测量的。** 身高、体重、三围这类能用尺子和秤核对的。
 #: 血型、色觉、性别这些不是"每周会变的状态"，是一条不该被模型改写的记录——
 #: 放进周更里，模型"总结"一下就能改掉，那不是记录该有的样子。
-ALLOWED = frozenset({"birth_date", "height_cm", "weight_kg",
-                     "bust_cm", "waist_cm", "hip_cm", "underbust_cm"})
+ALLOWED = frozenset({
+    "birth_date",
+    # 整体
+    "height_cm", "weight_kg",
+    # 三围 + 下胸围（下胸围是罩杯的分母，没有它胸围只是个孤立数字）
+    "bust_cm", "underbust_cm", "waist_cm", "hip_cm",
+    # 骨架与四肢比例——游戏建模里决定剪影的那几项
+    "shoulder_cm",      # 肩宽
+    "inseam_cm",        # 内缝长（裆到脚踝），腿身比的分子
+    "foot_cm",          # 脚长，鞋码由它推导
+})
 
 #: **每个事实多久更新一次，怎么更新。**
 #:
@@ -96,6 +106,9 @@ CADENCE: dict[str, str] = {
     "waist_cm": "weekly",
     "hip_cm": "weekly",
     "underbust_cm": "weekly",
+    "shoulder_cm": "weekly",
+    "inseam_cm": "weekly",
+    "foot_cm": "manual",     # 成年后不再变，周更去"总结"它只会出错
 }
 
 #: 周更时允许模型动的键。**manual 的一律不许它改**——
@@ -225,6 +238,9 @@ def line(db: DB, *, now: int) -> str:
             n = _num(cur[k])
             out[k] = (int(n) if n is not None and n == int(n) else n) \
                 if n is not None else cur[k]
+    # 派生量一起给：她知道自己 75B，比知道自己胸围 86 更自然。
+    out.update({k: v for k, v in derived(db, now=now).items()
+                if k not in out})
     if not out:
         return ""
     return json.dumps(out, ensure_ascii=False, sort_keys=True,
@@ -260,3 +276,112 @@ def mark_week(db: DB, *, now: int) -> int | None:
         ext_id=f"character-run:{week_of(now)}", ts=now, recv_ts=now,
         payload=b"done")
     return ev
+
+# ── 派生量：读的时候算，不存 ────────────────────────────────
+
+#: 罩杯差值 -> 字母。差值是中国/日本口径（上胸围 − 下胸围，单位 cm）。
+#: 这是**分档**，不是尺寸本身——尺寸由下胸围给（如 75B = 下胸围 75、差值 B）。
+CUP_STEPS: tuple[tuple[float, str], ...] = (
+    (7.5, "AA"), (10.0, "A"), (12.5, "B"), (15.0, "C"), (17.5, "D"),
+    (20.0, "E"), (22.5, "F"), (25.0, "G"), (999, "H+"),
+)
+
+
+def _f(d: dict[str, str], key: str) -> float | None:
+    return _num(d.get(key))
+
+
+def derived(db: DB, *, now: int) -> dict[str, Any]:
+    """由已有事实算出来、**不落库**的几个量。"""
+    cur = current(db)
+    out: dict[str, Any] = {}
+    h = _f(cur, "height_cm")
+    w = _f(cur, "weight_kg")
+    bust, under = _f(cur, "bust_cm"), _f(cur, "underbust_cm")
+    waist, hip = _f(cur, "waist_cm"), _f(cur, "hip_cm")
+    if h and w and h > 0:
+        out["bmi"] = round(w / ((h / 100.0) ** 2), 1)
+    if bust and under and bust > under:
+        diff = bust - under
+        for edge, letter in CUP_STEPS:
+            if diff < edge:
+                out["cup"] = letter
+                break
+        out["band"] = int(round(under / 2.5) * 2.5)
+    if waist and hip and hip > 0:
+        out["whr"] = round(waist / hip, 3)
+    inseam = _f(cur, "inseam_cm")
+    if h and inseam and h > 0:
+        out["leg_ratio"] = round(inseam / h, 3)
+    foot = _f(cur, "foot_cm")
+    if foot:
+        # 中国鞋码 = 脚长(cm) × 2 − 10，四舍五入到半码
+        out["shoe_cn"] = round((foot * 2.0 - 10.0) * 2) / 2
+    return out
+
+
+# ── 自洽检查 ────────────────────────────────────────────────
+
+#: 参考区间。**是合理性包络，不是医学标准**——用来发现"身高体重组合不真实"这类错误，
+#: 不是用来规定她该长什么样。年轻人中国女性的公开体型资料大致落在这个范围。
+PLAUSIBLE = {
+    "bmi": (15.0, 32.0),          # 低于/高于这个，身高体重自相矛盾
+    "whr": (0.62, 0.95),          # 腰臀比
+    "leg_ratio": (0.42, 0.55),    # 内缝长 / 身高
+    "hip_over_height": (0.48, 0.62),
+    "shoulder_over_height": (0.20, 0.27),
+    "cup_diff": (2.5, 30.0),      # 上胸围 − 下胸围
+}
+
+
+def problems(values: dict[str, str] | None = None, *,
+             now: int, db: DB | None = None) -> list[str]:
+    """这套数字自相矛盾吗。**返回问题清单，空表示自洽。**
+
+    检查的是**跨字段**的关系——单个字段的范围由 `bounded()` 管，
+    这里管"每个都合理，合起来不可能"。
+    """
+    if values is None:
+        if db is None:
+            return []
+        values = current(db)
+    out: list[str] = []
+    h = _num(values.get("height_cm"))
+    w = _num(values.get("weight_kg"))
+    bust, under = _num(values.get("bust_cm")), _num(values.get("underbust_cm"))
+    waist, hip = _num(values.get("waist_cm")), _num(values.get("hip_cm"))
+    shoulder = _num(values.get("shoulder_cm"))
+    inseam = _num(values.get("inseam_cm"))
+
+    if bust is not None and under is not None:
+        if bust <= under:
+            out.append(f"胸围 {bust:g} 不大于下胸围 {under:g}——这两个数互换了吧")
+        else:
+            lo, hi = PLAUSIBLE["cup_diff"]
+            if not (lo <= bust - under <= hi):
+                out.append(f"胸围差 {bust - under:g} 超出 {lo}-{hi}")
+    if waist is not None and hip is not None and hip > 0:
+        if waist >= hip:
+            out.append(f"腰围 {waist:g} 不小于臀围 {hip:g}")
+        else:
+            lo, hi = PLAUSIBLE["whr"]
+            if not (lo <= waist / hip <= hi):
+                out.append(f"腰臀比 {waist / hip:.2f} 超出 {lo}-{hi}")
+    if h and w and h > 0:
+        b = w / ((h / 100.0) ** 2)
+        lo, hi = PLAUSIBLE["bmi"]
+        if not (lo <= b <= hi):
+            out.append(f"BMI {b:.1f} 超出 {lo}-{hi}——身高体重自相矛盾")
+    if h and hip:
+        lo, hi = PLAUSIBLE["hip_over_height"]
+        if not (lo <= hip / h <= hi):
+            out.append(f"臀围/身高 {hip / h:.2f} 超出 {lo}-{hi}")
+    if h and shoulder:
+        lo, hi = PLAUSIBLE["shoulder_over_height"]
+        if not (lo <= shoulder / h <= hi):
+            out.append(f"肩宽/身高 {shoulder / h:.2f} 超出 {lo}-{hi}")
+    if h and inseam:
+        lo, hi = PLAUSIBLE["leg_ratio"]
+        if not (lo <= inseam / h <= hi):
+            out.append(f"内缝长/身高 {inseam / h:.2f} 超出 {lo}-{hi}")
+    return out

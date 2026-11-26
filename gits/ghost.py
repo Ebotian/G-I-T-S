@@ -306,6 +306,14 @@ class Ghost:
             if not ok:
                 self.fault("character:" + str(key), ValueError(why), now=t)
                 continue
+            # **跨字段自洽检查。** 单看每个都合理、合起来不可能的，在这里拦。
+            trial = dict(C.current(self.db))
+            trial[str(key)] = str(value)
+            bad = C.problems(trial, now=t)
+            if bad:
+                self.fault("character:" + str(key), ValueError("; ".join(bad)),
+                           now=t)
+                continue
             if C.record(self.db, key=str(key), value=value, src="dream",
                         now=t):
                 changed.append(str(key))
