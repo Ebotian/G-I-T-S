@@ -23,6 +23,19 @@
     p = (k + m0 * p0) / (n + m0)
 
 数据少的格自动退化成全局；数据多的格才长出个性。**没有一个是配置出来的。**
+
+## 分母内生：按时间加权，不按条数
+
+手机上报是**位置变了才触发**，不是定时轮询。于是"一条定位"不等于"一个时刻"：
+
+    他在家待一整天   -> 一条定位代表 8 小时
+    他通勤来回走     -> 一条定位代表 2 分钟
+
+按每条定位算率，等于在移动时段过采样、在久坐时段欠采样——而**久坐的地方
+恰恰是家**。也就是说，采样过程和被估的量是相关的，这不是精度问题，是偏了。
+
+所以每条定位带一个权重：它代表的那段时长（到下一次定位为止，封顶 MAX_GAP）。
+率 = 加权和 / 权重和。这和无偏估计是同一件事：样本不均匀就按时长加权。
 和 association=(w+a)/(w+a+b) 是同一个模式，闭式解，不需要 MCMC。
 """
 
@@ -45,6 +58,25 @@ def _fixes(db: DB, *, limit: int = 20000) -> list[tuple[int, int]]:
     return [(int(r["ts"]), int(r["place_id"])) for r in db.q(
         "SELECT ts, place_id FROM place_fixes WHERE ts>0 ORDER BY ts LIMIT ?",
         (limit,))]
+
+
+def weights(db: DB, *, limit: int = 20000) -> list[float]:
+    """每条定位代表的那段时长，**归一化成均值 1**。
+
+    归一化是为了让有效样本量还叫"条数"，和 PRIOR_N 的量纲对得上。
+    """
+    rows = [(int(r["ts"]), int(r["dwell_ms"] or 0)) for r in db.q(
+        "SELECT ts, dwell_ms FROM place_fixes WHERE ts>0 ORDER BY ts LIMIT ?",
+        (limit,))]
+    if not rows:
+        return []
+    gaps = [max(0, d) for _ts, d in rows]
+    # 最后一条没有"下一条"，用中位数补，免得被 0 拖偏
+    nz = sorted(g for g in gaps if g > 0)
+    fill = nz[len(nz) // 2] if nz else 1
+    gaps[-1] = gaps[-1] or fill
+    mean = sum(gaps) / len(gaps) or 1.0
+    return [g / mean for g in gaps]
 
 
 def _msgs(db: DB, *, limit: int = 20000) -> list[int]:
@@ -73,17 +105,21 @@ def rates(db: DB, *, now: int) -> dict[str, Any]:
     if not fixes:
         return {"global": [0.0] * 24, "by_place": {}, "n": 0}
 
-    gk = [0] * 24
-    gn = [0] * 24
-    pk: dict[int, list[int]] = {}
-    pn: dict[int, list[int]] = {}
-    for ts, pid in fixes:
+    w = weights(db, limit=len(fixes))
+    if len(w) != len(fixes):
+        w = [1.0] * len(fixes)
+
+    gk = [0.0] * 24
+    gn = [0.0] * 24
+    pk: dict[int, list[float]] = {}
+    pn: dict[int, list[float]] = {}
+    for (ts, pid), ww in zip(fixes, w):
         h = _hour(ts)
         hit = _followed(mts, ts)
-        gn[h] += 1
-        gk[h] += 1 if hit else 0
-        pk.setdefault(pid, [0] * 24)[h] += 1 if hit else 0
-        pn.setdefault(pid, [0] * 24)[h] += 1
+        gn[h] += ww
+        gk[h] += ww if hit else 0.0
+        pk.setdefault(pid, [0.0] * 24)[h] += ww if hit else 0.0
+        pn.setdefault(pid, [0.0] * 24)[h] += ww
 
     # 全局：Beta(k+1, n-k+1) 的后验均值。没有样本就是 0.5 的均匀先验。
     g = [(gk[h] + 1) / (gn[h] + 2) for h in range(24)]

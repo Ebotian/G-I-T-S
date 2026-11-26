@@ -99,16 +99,18 @@ IDLE ◄──── 任务完成 ──── BUSY ──── 要走了 ─�
 
 | 节点 / 层 | 依赖 | 磁盘 | 常驻 RSS | 预算 | 余量 |
 |---|---|---|---|---|---|
-| cloud / ghost | numpy | **53 MB** | ~30 MB | 120 MB | 90 MB |
+| cloud / ghost | numpy | **53 MB** | ~30 MB | 无上限 | stdlib+numpy |
 | cloud / dream | + statsmodels | **260 MB** | 152 MB | 400 MB | 248 MB |
 | office / ml | + onnxruntime | **128 MB** | 待测（估 150） | 8 GB | 很大 |
 
 **放得进去就允许**，但必须有实测数字。禁令退化成一条：
-**ghost 不许 import 任何启动时超过 90 MB RSS 的东西。** 这条有测试守着。
+**ghost 只允许 stdlib + numpy。** RSS < 200 MB、import < 500 ms 是观测指标，
+不是允许清单（早先写成「90 MB 预算」，那是倒推出来的）。这条有测试守着
+（`test_ghost_不导入_statsmodels`）。
 
 ⚠️ 上一版我写"ECS 装不下 ml：onnxruntime 200 MB、torch 2 GB+"——**实测纠正**：
 onnxruntime 装上只有 **128 MB**，ECS 的 31 GB 盘**放得下**。
-真正的门槛不是磁盘，是**内存**：ghost 的 90 MB 余量放不下它，
+真正的门槛不是磁盘也不是内存，是**依赖纪律**：ghost 只允许 stdlib + numpy，
 所以它只能进 dream 或 office。**torch 那 2 GB 量级的东西才是真的上不了云。**
 
 ## 7. uv 怎么管

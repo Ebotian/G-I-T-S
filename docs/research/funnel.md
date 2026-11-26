@@ -130,7 +130,7 @@ depth 0: 几千   depth 1: 几百   depth 2: 几十   depth 3: 个位数
 
 **实体锚定**：所有 `mentions` 到实体 e 的节点。
 
-不用向量的理由很硬：ghost 预算 120MB，任何 embedding 模型都放不进去
+不用向量的理由很硬：**ghost 只允许 stdlib + numpy**，任何 embedding 模型都要额外依赖
 （bge-small-zh 就要 80MB，potion-128M 要 512MB）。
 `mentions` 边是抽取时已经在写的，零成本。
 
@@ -346,7 +346,7 @@ n=20 时它顶到上界——那时候是数据在说话，不是先验。
 ### 8.4 工程约束决定了「共轭」不是偏好而是必须
 
 ```
-ghost 预算 120MB，只有 numpy；没有 scipy、不可能跑 MCMC
+ghost 只有 numpy（没有 scipy，也不可能跑 MCMC）
 ```
 
 Beta / Gamma 都有闭式解，一次四则运算。所以在我们的机器上，

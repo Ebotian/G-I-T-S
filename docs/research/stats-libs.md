@@ -14,14 +14,18 @@
 
 ECS 上装 numpy + statsmodels：磁盘 **361 MB**，pip 31 s（走阿里云镜像）。
 
-> `ghost` 的内存目标是 90 MB。**statsmodels 一进来就超一倍半。**
+> 第一约束是**允许哪些库**：ghost 只允许 stdlib + numpy。
+> 早先写的「90 MB 预算」其实是先决定不用 statsmodels（152 MB）、再倒推出来的数——
+> 它挡不住「这个库有用」，只挡得住「这个库很大」。现在 ghost 实测 42 MB。
+>
+> 所以：**允许清单是约束，RSS 和 import 耗时是观测指标。**
 > 所以结论不是"用不用"，是"在哪用"。
 
 ## 2. 三层依赖纪律
 
 | 进程 | 允许 | 理由 |
 |---|---|---|
-| `ghost`（常驻，处理对话） | **stdlib + numpy** | 内存 90 MB 上限，import 必须在 200 ms 内 |
+| `ghost`（常驻，处理对话） | **stdlib + numpy** | 允许清单是约束；RSS < 200 MB、import < 500 ms 是观测指标 |
 | `shell`（通道/采集） | stdlib + numpy | 同上 |
 | `dream`（夜间批处理） | **statsmodels / scipy / pandas 随意** | 一晚一次，2 秒 import 无所谓；跑完就退 |
 | `synth` / tests | 任意 | 开发期 |
@@ -92,7 +96,7 @@ ECS 上装 numpy + statsmodels：磁盘 **361 MB**，pip 31 s（走阿里云镜�
 ## 6. 依赖政策
 
 1. **新依赖要有实测数字**（import 耗时、RSS、磁盘），贴进本文件，再决定放哪一层
-2. **`ghost` 的依赖只减不增**。想加库，先证明它放得进 90 MB
+2. **`ghost` 的依赖只减不增**。想加库，先证明这件事不能在 `dream` 里做完
 3. 版本锁在 `pyproject.toml`；`dream` 的额外依赖放 `[project.optional-dependencies]`
 4. **换掉手写实现的前提是"它算得对"**：先用同一份数据跑对照（像 `lomb_scargle` 那样），
    相关性和峰位一致再换

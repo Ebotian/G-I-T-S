@@ -97,3 +97,87 @@ def load(db: Any, fixes: list[dict[str, Any]], msgs: list[int]) -> None:
                 "INSERT INTO events(ts, recv_ts, source, kind, ext_id, payload,"
                 " lag, ts_trust, scope) VALUES(?,?,?,?,?,?,?,?,?)",
                 (m, m, "shell", "msg_in", f"msg:{m}", b"hi", 0, 1, "world"))
+
+
+# ── 不规则采样：位置变了才上报 ─────────────────────────────
+#
+# 真实的上报是"位置变了才触发"，不是定时轮询。于是样本量和被估的量相关：
+# 走动时定位密、久坐时定位稀。这一段专门制造这种不均匀，用来检验
+# coupling 的时间加权是不是真的把偏差纠回来了。
+
+#: 每个地方每小时他发消息的率（**真值**，合成时写进去的）
+TRUE_RATE = {
+    "home": {h: (0.5 if 19 <= h < 23 else 0.02) for h in range(24)},
+    "work": {h: (0.15 if 10 <= h < 12 else 0.01) for h in range(24)},
+    "moving": {h: 0.01 for h in range(24)},
+}
+
+
+def _segments(start_ms: int, days: int) -> list[tuple[str, int, int]]:
+    """他的一天：家 -> 通勤 -> 公司 -> 通勤 -> 家。周末全在家。"""
+    segs = []
+    for d in range(days):
+        base = start_ms + d * 86_400_000
+        wd = dt.datetime.fromtimestamp(base / 1000).weekday() < 5
+        def at(h: int, m: int = 0) -> int:
+            return base + h * 3_600_000 + m * 60_000
+        if not wd:
+            segs.append(("home", base, base + 86_400_000))
+            continue
+        segs += [
+            ("home", at(0), at(8, 30)),
+            ("moving", at(8, 30), at(9)),
+            ("work", at(9), at(18)),
+            ("moving", at(18), at(18, 30)),
+            ("home", at(18, 30), base + 86_400_000),
+        ]
+    return segs
+
+
+def gen_irregular(*, start_ms: int, days: int = 7, seed: int = 3,
+                  acc: float = 30.0, heartbeat_ms: int = 4 * 3_600_000,
+                  moving_step_ms: int = 5 * 60_000, interact: bool = False
+                  ) -> tuple[list[dict[str, Any]], list[int], dict[int, float]]:
+    """返回 (定位, 消息, 每小时的真实率)。
+
+    **采样随位置变**：静止时只有心跳（4 小时一条），走动时 5 分钟一条。
+    """
+    rnd = random.Random(seed)
+    segs = _segments(start_ms, days)
+    fixes: list[dict[str, Any]] = []
+    msgs: list[int] = []
+
+    pos = {"home": HOME, "work": WORK, "moving": (27.8550, 120.8450)}
+
+    for kind, a, b in segs:
+        lat0, lon0 = pos[kind]
+        step = moving_step_ms if kind == "moving" else heartbeat_ms
+        t = a
+        while t < b:
+            lat, lon = _shift(lat0, lon0, rnd.gauss(0, acc / 2), rnd.gauss(0, acc / 2))
+            fixes.append({"lat": lat, "lon": lon, "acc": acc,
+                          "source": "network", "fix_ts": t})
+            t += step
+        # 这段时间里他发消息：泊松，1 分钟一跳
+        for m in range(a, b, 60_000):
+            when = dt.datetime.fromtimestamp(m / 1000)
+            rate = TRUE_RATE[kind][when.hour]
+            if interact and kind == "home" and 19 <= when.hour < 23:
+                # 交互：beta 的假设类（place x hour）表达不了这一项
+                rate = 0.12 if when.weekday() < 5 else 1.2
+            if rnd.random() < rate / 60.0:
+                msgs.append(m)
+
+    fixes.sort(key=lambda f: f["fix_ts"])
+    msgs.sort()
+
+    # 真实的时间平均率：把每段的时间按小时累加，再乘该段的真率
+    num = [0.0] * 24
+    den = [0.0] * 24
+    for kind, a, b in segs:
+        for m in range(a, b, 60_000):
+            h = dt.datetime.fromtimestamp(m / 1000).hour
+            den[h] += 1.0
+            num[h] += TRUE_RATE[kind][h] / 60.0
+    truth = {h: (num[h] / den[h] if den[h] else 0.0) for h in range(24)}
+    return fixes, msgs, truth

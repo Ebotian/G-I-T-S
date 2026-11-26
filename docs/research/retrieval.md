@@ -58,7 +58,7 @@ FTS / recall 的生产路径）复现：top-5 命中 1.0，@1 ≥ 0.5（10 条�
 
 | 方案 | 代价 |
 |---|---|
-| jieba | 默认词典常驻 **~50 MB RSS**，而 ghost 的预算只有 120 MB |
+| jieba | 默认词典常驻 **~50 MB RSS**；ghost 只允许 stdlib + numpy |
 | **字符二元组** | 索引大一点；无词典、无 OOV、内存零 |
 
 ## 5. 三个 bug（都不报错，只是结果错）
@@ -76,7 +76,7 @@ FTS / recall 的生产路径）复现：top-5 命中 1.0，@1 ≥ 0.5（10 条�
 
 ## 6. embedding 提供商：都查过，都不行
 
-| 方案 | 规模 | 能否进 ghost（120 MB） |
+| 方案 | 规模 | 能否进 ghost（stdlib + numpy） |
 |---|---|---|
 | `potion-multilingual-128M` | Model2Vec 静态向量，bge-m3 蒸馏，256 维 | fp32 ≈512 MB ✗ |
 | `bge-small-zh-v1.5` | 512 维，≈40M 参数，≈80 MB RSS | ✗（ghost 已用 30 MB） |

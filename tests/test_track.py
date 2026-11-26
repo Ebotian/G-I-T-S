@@ -163,3 +163,111 @@ def test_率永远说不死(world) -> None:
     for h in range(24):
         v = coupling.arrival(db, now=T0, hour=h)
         assert 0.0 <= v <= 1.0
+
+
+# ── 采样不是均匀的：时间加权 vs 按条数 ──────────────────────
+
+
+def test_按条数会被不均匀采样带偏() -> None:
+    """上报是"位置变了才触发"，所以走动时密、久坐时稀。
+
+    这条用**手搭的数据**检验估计量本身，不靠模拟：
+    走动的地方 200 条短停留、几乎不说话；家里 4 条长停留、经常说话。
+    按条数平均会被那 200 条拉低，按时间加权才对应"时间上的率"。
+    """
+    import tempfile
+
+    from gits.core.db import DB, Writer
+
+    db = DB(Path(tempfile.mkdtemp()) / "g.db")
+    try:
+        rows = []
+        # 走动：200 条，每条代表 1 分钟
+        for i in range(200):
+            ts = T0 + i * 60_000
+            rows.append(("w", ts, 60_000))
+        # 家：4 条，每条代表 3 小时
+        for i in range(4):
+            ts = T0 + i * 10_800_000
+            rows.append(("h", ts, 10_800_000))
+        with Writer(db).txn() as c:
+            c.execute("INSERT INTO places(id, scope, lat, lon, n, first_ts, last_ts)"
+                      " VALUES(1,'self:her',27.8,120.8,200,?,?)", (T0, T0))
+            c.execute("INSERT INTO places(id, scope, lat, lon, n, first_ts, last_ts)"
+                      " VALUES(2,'self:her',27.9,120.9,4,?,?)", (T0, T0))
+            for i, (kind, ts, dwell) in enumerate(rows):
+                pid = 1 if kind == "w" else 2
+                c.execute("INSERT INTO place_fixes(place_id, event_id, ts, dwell_ms)"
+                          " VALUES(?,?,?,?)", (pid, i + 1, ts, dwell))
+                c.execute("INSERT INTO learn_cursor(name, last_event_id)"
+                          " VALUES('seed',0) ON CONFLICT DO NOTHING")
+        # 家里说话了：4 条里 3 条后面跟着消息
+        for ts in [T0, T0 + 10_800_000, T0 + 21_600_000]:
+            with Writer(db).txn() as c:
+                c.execute("INSERT INTO events(ts, recv_ts, source, kind, ext_id,"
+                          " payload, lag, ts_trust, scope)"
+                          " VALUES(?,?,?,?,?,?,?,?,?)",
+                          (ts + 60_000, ts + 60_000, "shell", "msg_in",
+                           f"m:{ts}", b"hi", 0, 1, "world"))
+
+        w = coupling.weights(db)
+        assert max(w) > 100 * min(w), "权重应该差两个数量级以上"
+
+        # 加权：走动的时间占 200 分钟，家的时间占 720 分钟
+        num = sum(ww for (_ts, pid), ww in zip(coupling._fixes(db), w) if pid == 2)
+        den = sum(w)
+        assert num / den > 0.7, f"家的时间占比应该超过 70%，实际 {num/den:.2f}"
+    finally:
+        db.close()
+
+
+def test_久坐的地方按时间也算地方() -> None:
+    """按条数算的话，家只有心跳那么几条，会被跳点压过去；按时长算不会。"""
+    import tempfile
+
+    from gits.core.db import DB
+
+    fixes, _msgs, _truth = track.gen_irregular(start_ms=T0, days=3)
+    db = DB(Path(tempfile.mkdtemp()) / "g.db")
+    try:
+        track.load(db, fixes, _msgs)
+        places.learn(db)
+        ps = places.real_places(db)
+        assert ps, "一个地方都没认出来"
+        home = max(ps, key=lambda p: p["best_dwell_ms"])
+        assert places._dist_m(home["lat"], home["lon"], *track.HOME) < 500, \
+            "待得最久的地方不是家"
+        assert home["best_dwell_ms"] >= places.MIN_DWELL_MS
+    finally:
+        db.close()
+
+
+def test_一条跳点不认领它之后那段时间() -> None:
+    """跳点后面接的是别的地方，那段时长不能算给跳点。
+
+    否则 30 分钟采样间隔下，一次单点跳点会被认成"在那儿待了 30 分钟"。
+    """
+    import tempfile
+
+    from gits.core.db import DB
+    from gits.world import loc as L
+
+    db = DB(Path(tempfile.mkdtemp()) / "g.db")
+    try:
+        # 每 30 分钟一条：家、跳点、家
+        for i, (lat, lon) in enumerate([
+                (track.HOME[0], track.HOME[1]),
+                (track.FAR[0], track.FAR[1]),
+                (track.HOME[0], track.HOME[1]),
+                (track.HOME[0], track.HOME[1]),
+                (track.HOME[0], track.HOME[1])]):
+            L.record(db, lat=lat, lon=lon, acc=30, source="network",
+                     fix_ts=T0 + i * 1_800_000, now=T0 + i * 1_800_000)
+        places.learn(db)
+        far = [p for p in places.all_places(db)
+               if places._dist_m(p["lat"], p["lon"], *track.FAR) < 1000]
+        assert far and far[0]["best_dwell_ms"] == 0, \
+            f"跳点认领了时间：{far[0] if far else None}"
+        assert not places.counts_as_place(far[0])
+    finally:
+        db.close()

@@ -39,7 +39,7 @@
 | 进程 | 目标 RSS |
 |---|---|
 | 系统 + murmurd + 阿里云 agent | ~250 MB |
-| `ghost` | 90 MB |
+| `ghost` | stdlib + numpy |
 | `shell` | 70 MB |
 | `dream`（空闲） | 60 MB |
 | **合计** | **~470 MB**（余量 ~500 MB，必须有 swap 兜底） |

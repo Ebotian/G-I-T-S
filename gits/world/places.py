@@ -34,10 +34,14 @@ CONFIRM_N = 2
 #: 一个地方至少要有这么多条定位才被当成"地方"。
 #: **证据广度**——网络切换造成的一次 40 公里跳点不该长成一个场所。
 MIN_FIXES = 3
-#: **停留**：至少连续两次读数落在同一个地方。
-#: 这条比 MIN_FIXES 更要紧：跳点可以反复出现（每切一次网络就一个），
-#: 攒够次数也会过 MIN_FIXES，但它的每一趟都只有一次，没有"停留"。
-MIN_DWELL = 2
+#: **停留时长**：至少连续待够这么久才算一个地方。
+#:
+#: 注意这里是**时长不是次数**。上报是"位置变了才触发"，不是定时轮询：
+#: 他在家待一整天可能只有两条定位，通勤来回走却有一串。按次数算，
+#: 跳点攒一周有 16 条，家可能只有 2 条——**最要紧的地方看起来最不像地方**。
+MIN_DWELL_MS = 30 * 60_000
+#: 一条定位最多代表多长时间（超过就认为中间断了，不连续）
+MAX_GAP_MS = 6 * 3_600_000
 #: 步长。度 -> 米（纬度）；经度要乘 cos(lat)
 M_PER_DEG = 111_320.0
 
@@ -121,7 +125,8 @@ def _ingest(c: Any, r: dict) -> None:
     if best is None:
         cur = c.execute(
             "INSERT INTO places(scope, lat, lon, radius, n, w, first_ts, last_ts,"
-            " run, best_run) VALUES('self:her',?,?,?,1,?,?,?,1,1)",
+            " run, best_run, run_dwell_ms, best_dwell_ms)"
+            " VALUES('self:her',?,?,?,1,?,?,?,1,1,0,0)",
             (lat, lon, max(RADIUS, 1.5 * acc), 1.0 / (acc * acc + 1),
              ts or 0, ts or 0))
         pid = int(cur.lastrowid)
@@ -139,6 +144,25 @@ def _ingest(c: Any, r: dict) -> None:
             (float(best["w"]), lat, w, tw,
              float(best["w"]), lon, w, tw,
              tw, ts or 0, max(RADIUS, 1.5 * acc), run, run, pid))
+    # **先把上一条定位代表的那段时长结算掉。**
+    # 上报是位置变了才触发，所以"一条定位"= "从它到下一条"的那段时间。
+    # **只有下一条定位还在同一个地方，这段时长才归这个地方。**
+    # 否则不知道他是什么时候走的——把整段算给前一个地点，等于替一次跳点
+    # 认领了它之后那半小时（实测：30 分钟采样间隔下，单点跳点会被认成"待了 30 分钟"）。
+    last = c.execute("SELECT place_id, event_id, ts FROM place_fixes"
+                     " ORDER BY event_id DESC LIMIT 1").fetchone()
+    if last is not None and ts and int(last["place_id"]) == pid:
+        gap = int(ts) - int(last["ts"] or 0)
+        if 0 < gap <= MAX_GAP_MS:
+            c.execute("UPDATE place_fixes SET dwell_ms=? WHERE event_id=?",
+                      (gap, int(last["event_id"])))
+            row = c.execute("SELECT run_dwell_ms FROM places WHERE id=?",
+                            (pid,)).fetchone()
+            run_dwell = int(row["run_dwell_ms"]) + gap
+            c.execute("UPDATE places SET run_dwell_ms=?,"
+                      " best_dwell_ms=max(best_dwell_ms, ?) WHERE id=?",
+                      (run_dwell, run_dwell, pid))
+
     # 成员资格永久：只加不删
     c.execute("INSERT INTO place_fixes(place_id, event_id, ts) VALUES(?,?,?)"
               " ON CONFLICT DO NOTHING", (pid, r["_event_id"], ts or 0))
@@ -188,20 +212,22 @@ def current(db: DB, *, actor: str = "her") -> dict[str, Any] | None:
     row = db.one("SELECT s.place_id AS id, s.since, p.lat, p.lon, p.name,"
                  " p.n, p.best_run"
                  " FROM place_state s JOIN places p ON p.id=s.place_id"
-                 " WHERE s.actor=? AND p.n>=? AND p.best_run>=?",
-                 (actor, MIN_FIXES, MIN_DWELL))
+                 " WHERE s.actor=? AND p.n>=? AND p.best_dwell_ms>=?",
+                 (actor, MIN_FIXES, MIN_DWELL_MS))
     return dict(row) if row else None
 
 
 def all_places(db: DB) -> list[dict]:
     return [dict(r) for r in db.q(
-        "SELECT id, lat, lon, radius, n, name, first_ts, last_ts, best_run"
+        "SELECT id, lat, lon, radius, n, name, first_ts, last_ts, best_run,"
+        " best_dwell_ms"
         " FROM places WHERE scope='self:her' ORDER BY n DESC")]
 
 
 def counts_as_place(p: dict) -> bool:
     """这条记录算不算"一个地方"。**两条都要：证据广度 + 停留。**"""
-    return int(p.get("n") or 0) >= MIN_FIXES and int(p.get("best_run") or 0) >= MIN_DWELL
+    return (int(p.get("n") or 0) >= MIN_FIXES
+            and int(p.get("best_dwell_ms") or 0) >= MIN_DWELL_MS)
 
 
 def real_places(db: DB) -> list[dict]:
