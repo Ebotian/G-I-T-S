@@ -55,6 +55,9 @@ class RelationSnapshot:
     #: 说话的样子（style.py 算出来的）。空 = 没什么特别要调的。
     #: **这一行会变**，所以只能在 B 段；塞进 A 段会把缓存前缀打碎。
     style: str = ""
+    #: 外面的世界（world/amap.py 读出来的）。空 = 不知道就不说。
+    #: **只说外面，不说建议**——"外面在下雨" 是事实，"记得带伞" 是替他想。
+    world: str = ""
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,7 @@ def render_b(snap: RelationSnapshot) -> str:
         f"此刻的状态：{snap.phase}\n"
         + (f"{snap.affect}\n" if snap.affect else "")
         + (f"{snap.style}\n" if snap.style else "")
+        + (f"{snap.world}\n" if snap.world else "")
     )
 
 

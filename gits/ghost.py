@@ -105,6 +105,10 @@ class Ghost:
     #: 窗口决策。慢一点没关系——它只在积压时才有活干。
     ctx_ms: int = 60_000
     _last_ctx: int = 0
+    #: 外面的世界（天气/位置）。**读数是事件**，装配只读日志，
+    #: 所以这里只是采集，不是决策。取不到就跳过，不加时延。
+    world_ms: int = 30 * 60_000
+    _last_world: int = 0
     #: 整理一次大概要多久。先拍 20 秒，之后用实测中位数替换。
     compact_ms_est: int = 20_000
     _compact_future: object | None = None
@@ -192,6 +196,10 @@ class Ghost:
             got = self.window(t)
             if got:
                 did["ctx"] = got
+        if t - self._last_world >= self.world_ms:
+            got = self.world(t)
+            if got:
+                did["world"] = got
         if t - self._last_night >= self.ctx_ms:
             got = self.night(t)
             if got:
@@ -204,6 +212,20 @@ class Ghost:
 
             drive_update(self.db, "her", now=t)
         return did
+
+    # ── 外面的世界 ──
+    def world(self, t: int | None = None) -> str:
+        """取一次外面的读数。**没有天气是正常状态**，不抛、不重试。"""
+        from gits.world import amap
+
+        t = now_ms() if t is None else t
+        self._last_world = t
+        try:
+            key, adcode = amap.config()
+        except RuntimeError:
+            return ""                 # 没配就是没有，不是错误
+        got = amap.maybe(self.db, now=t, key=key, adcode=adcode)
+        return (got or {}).get("weather", "") if got else ""
 
     def night(self, t: int | None = None) -> str:
         """夜里该不该动人格。先判定、记账；确认过得去了才真的改。"""

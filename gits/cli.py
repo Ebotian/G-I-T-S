@@ -138,6 +138,40 @@ def _replay_shadow(args: argparse.Namespace) -> int:
             Path(str(shadow) + extra).unlink(missing_ok=True)
 
 
+def cmd_world(args: argparse.Namespace) -> int:
+    """外面的世界：她此刻读到的天气。**读数落成事件，不是实时查询。**"""
+    import time
+
+    from gits.core.db import DB
+    from gits.world import amap
+
+    db = DB(Path(args.db))
+    try:
+        key, adcode = amap.config()
+    except RuntimeError as exc:
+        print(f"  {exc}")
+        return 2
+    now = int(time.time() * 1000)
+    if args.fetch:
+        got = amap.maybe(db, now=now, key=key, adcode=adcode)
+        print(f"  采集：{'取到 ' + str(got.get('weather')) if got else '没有新观测（未过期或取不到）'}")
+    r = amap.latest(db, now=now)
+    if r is None:
+        print("  还没有任何读数")
+        return 1
+    fresh = not amap._stale(r, now=now, ttl=amap.FRESH_MS)
+    print(f"  观测：{r.get('city')} {r.get('weather')} {r.get('temp')} 度 "
+          f"湿度 {r.get('humidity')} {r.get('wind')}风 {r.get('power')} 级")
+    print(f"  时间：{r.get('report')}  {'新鲜' if fresh else '已过期（不进上下文）'}")
+    print(f"  B 段一行：{amap.line(db, now=now) or '（空——不知道就不说）'}")
+    if args.verify_location:
+        ip = amap.fetch_ip(key=key)
+        same = ip.get("adcode") == adcode
+        print(f"  IP 定位：{ip.get('province')}{ip.get('city')}（{ip.get('adcode')}）"
+              f"  {'与配置一致' if same else '与配置不符——IP 是机房位置，以配置为准'}")
+    return 0
+
+
 def cmd_quota(args: argparse.Namespace) -> int:
     """额度账户。像电子账户一样，规则全部可见。"""
     from gits.io.quota import Account, Budget, allowance
@@ -452,6 +486,11 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("outbox_id", type=int)
     t.set_defaults(fn=cmd_trace)
 
+    wd = sub.add_parser("world", help="外面的世界：天气/位置（读数是事件）")
+    wd.add_argument("--fetch", action="store_true", help="现在去取一次")
+    wd.add_argument("--verify-location", action="store_true",
+                    help="用 IP 定位核对配置（只核对，不覆盖）")
+    wd.set_defaults(fn=cmd_world)
     q = sub.add_parser("quota", help="额度账户（像电子账户一样可见）")
     q.add_argument("--actor", default="her")
     q.add_argument("--monthly", type=float, default=200.0)
